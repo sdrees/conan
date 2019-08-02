@@ -1,7 +1,6 @@
 import platform
-import unittest
-
 import subprocess
+import unittest
 
 from conans.test.utils.tools import TestClient
 
@@ -28,7 +27,7 @@ int main() {
 """
 
 
-
+@unittest.skipIf(platform.system() == "Windows", ".pc files not in Win")
 class PkgConfigTest(unittest.TestCase):
 
     def test_reuse_pc_approach1(self):
@@ -94,9 +93,6 @@ class LibAConan(ConanFile):
 
 """
 
-        if platform.system() == "Windows":
-            return
-
         self._run_reuse(libb_conanfile, liba_conanfile)
 
     def test_reuse_pc_approach2(self):
@@ -154,7 +150,8 @@ class LibAConan(ConanFile):
     def build(self):
 
         args = '--define-variable package_root_path_lib_b=%s' % self.deps_cpp_info["libB"].rootpath
-        pkgconfig_exec = 'pkg-config --define-variable package_root_path_lib_b=%s' % (self.deps_cpp_info["libB"].rootpath)
+        pkgconfig_exec = ('pkg-config --define-variable package_root_path_lib_b=%s'
+                          % (self.deps_cpp_info["libB"].rootpath))
         vars = {'PKG_CONFIG': pkgconfig_exec, # Used in autotools, not in gcc directly
                 'PKG_CONFIG_PATH': "%s" % self.deps_cpp_info["libB"].rootpath}
 
@@ -162,9 +159,6 @@ class LibAConan(ConanFile):
            self.run('g++ main.cpp $(pkg-config %s libB --libs --cflags) -o main' % args)
 
 """
-
-        if platform.system() == "Windows":
-            return
 
         self._run_reuse(libb_conanfile, liba_conanfile)
 

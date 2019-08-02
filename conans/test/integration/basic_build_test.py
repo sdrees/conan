@@ -1,12 +1,14 @@
-import unittest
-from conans.test.utils.tools import TestClient
 import os
+import platform
+import unittest
+
+from nose.plugins.attrib import attr
+
+from conans.model.info import ConanInfo
 from conans.paths import CONANINFO
 from conans.test.utils.cpp_test_files import cpp_hello_conan_files
-from nose.plugins.attrib import attr
+from conans.test.utils.tools import TestClient
 from conans.util.files import load
-from conans.model.info import ConanInfo
-import platform
 
 
 @attr("slow")
@@ -14,16 +16,18 @@ class BasicBuildTest(unittest.TestCase):
 
     def build_cmake_test(self):
         for cmd, lang, static, pure_c in [("install .", 0, True, True),
-                                          ("install . -o language=1 -o static=False", 1, False, False)]:
+                                          ("install . -o language=1 -o static=False", 1,
+                                           False, False)]:
             build(self, cmd, static, pure_c, use_cmake=True, lang=lang)
 
     def build_default_test(self):
-        "build default (gcc in nix, VS in win)"
+        """ build default (gcc in nix, VS in win) """
         if platform.system() == "SunOS":
             return  # If is using sun-cc the gcc generator doesn't work
 
         for cmd, lang, static, pure_c in [("install .", 0, True, True),
-                                          ("install . -o language=1 -o static=False -g txt", 1, False, False)]:
+                                          ("install . -o language=1 -o static=False -g txt", 1,
+                                           False, False)]:
             build(self, cmd, static, pure_c, use_cmake=False, lang=lang)
 
 
@@ -41,9 +45,9 @@ def build(tester, cmd, static, pure_c, use_cmake, lang):
     if platform.system() == "Darwin":
         ld_path += ' DYLD_LIBRARY_PATH="%s"' % os.path.join(client.current_folder, 'lib')
     command = os.sep.join([".", "bin", "say_hello"])
-    client.runner("%s %s" % (ld_path, command), cwd=client.current_folder)
+    client.run_command("%s %s" % (ld_path, command))
     msg = "Hello" if lang == 0 else "Hola"
-    tester.assertIn("%s Hello0" % msg, client.user_io.out)
+    tester.assertIn("%s Hello0" % msg, client.out)
     conan_info_path = os.path.join(client.current_folder, CONANINFO)
     conan_info = ConanInfo.loads(load(conan_info_path))
     tester.assertTrue(conan_info.full_options.language == lang)

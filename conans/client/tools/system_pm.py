@@ -1,26 +1,42 @@
 import os
-from six import string_types
+import sys
+
 from conans.client.runner import ConanRunner
-from conans.client.tools.oss import OSInfo
+from conans.client.tools.oss import OSInfo, cross_building, get_cross_building_settings
+from conans.client.tools.files import which
 from conans.errors import ConanException
 from conans.util.env_reader import get_env
-
-_global_output = None
+from conans.util.fallbacks import default_output
 
 
 class SystemPackageTool(object):
 
-    def __init__(self, runner=None, os_info=None, tool=None, recommends=False):
+    def __init__(self, runner=None, os_info=None, tool=None, recommends=False, output=None, conanfile=None):
+        output = output if output else conanfile.output if conanfile else None
+        self._output = default_output(output, 'conans.client.tools.system_pm.SystemPackageTool')
         os_info = os_info or OSInfo()
         self._is_up_to_date = False
-        self._tool = tool or self._create_tool(os_info)
-        self._tool._sudo_str = "sudo " if self._is_sudo_enabled() else ""
-        self._tool._runner = runner or ConanRunner()
+        self._tool = tool or self._create_tool(os_info, output=self._output)
+        self._tool._sudo_str = self._get_sudo_str()
+        self._tool._runner = runner or ConanRunner(output=self._output)
         self._tool._recommends = recommends
+        self._conanfile = conanfile
+
+    @staticmethod
+    def _get_sudo_str():
+        if not SystemPackageTool._is_sudo_enabled():
+            return ""
+
+        if hasattr(sys.stdout, "isatty") and not sys.stdout.isatty():
+            return "sudo -A "
+        else:
+            return "sudo "
 
     @staticmethod
     def _is_sudo_enabled():
         if "CONAN_SYSREQUIRES_SUDO" not in os.environ:
+            if not which("sudo"):
+                return False
             if os.name == 'posix' and os.geteuid() == 0:
                 return False
             if os.name == 'nt':
@@ -33,27 +49,28 @@ class SystemPackageTool(object):
         mode = get_env("CONAN_SYSREQUIRES_MODE", "enabled")
         mode_lower = mode.lower()
         if mode_lower not in allowed_modes:
-            raise ConanException("CONAN_SYSREQUIRES_MODE=%s is not allowed, allowed modes=%r" % (mode, allowed_modes))
+            raise ConanException("CONAN_SYSREQUIRES_MODE=%s is not allowed, allowed modes=%r"
+                                 % (mode, allowed_modes))
         return mode_lower
 
     @staticmethod
-    def _create_tool(os_info):
+    def _create_tool(os_info, output):
         if os_info.with_apt:
-            return AptTool()
+            return AptTool(output=output)
         elif os_info.with_yum:
-            return YumTool()
+            return YumTool(output=output)
         elif os_info.with_pacman:
-            return PacManTool()
+            return PacManTool(output=output)
         elif os_info.is_macos:
-            return BrewTool()
+            return BrewTool(output=output)
         elif os_info.is_freebsd:
-            return PkgTool()
+            return PkgTool(output=output)
         elif os_info.is_solaris:
-            return PkgUtilTool()
+            return PkgUtilTool(output=output)
         elif os_info.with_zypper:
-            return ZypperTool()
+            return ZypperTool(output=output)
         else:
-            return NullTool()
+            return NullTool(output=output)
 
     def add_repository(self, repository, repo_key=None, update=True):
         self._tool.add_repository(repository, repo_key=repo_key)
@@ -66,30 +83,37 @@ class SystemPackageTool(object):
         """
         mode = self._get_sysrequire_mode()
         if mode in ("disabled", "verify"):
-            _global_output.info("Not updating system_requirements. CONAN_SYSREQUIRES_MODE=%s" % mode)
+            self._output.info("Not updating system_requirements. CONAN_SYSREQUIRES_MODE=%s" % mode)
             return
         self._is_up_to_date = True
         self._tool.update()
 
-    def install(self, packages, update=True, force=False):
+    def install(self, packages, update=True, force=False, arch_names=None):
+        """ Get the system package tool install command.
+
+        :param packages: String with all package to be installed e.g. "libusb-dev libfoobar-dev"
+        :param update: Run update command before to install
+        :param force: Force installing all packages
+        :param arch_names: Package suffix/prefix name used by installer tool e.g. {"x86_64": "amd64"}
+        :return: None
         """
-            Get the system package tool install command.
-        '"""
         packages = [packages] if isinstance(packages, str) else list(packages)
+        packages = self._get_package_names(packages, arch_names)
 
         mode = self._get_sysrequire_mode()
 
         if mode in ("verify", "disabled"):
             # Report to output packages need to be installed
             if mode == "disabled":
-                _global_output.info("The following packages need to be installed:\n %s" % "\n".join(packages))
+                self._output.info("The following packages need to be installed:\n %s"
+                                  % "\n".join(packages))
                 return
 
             if mode == "verify" and not self._installed(packages):
-                _global_output.error("The following packages need to be installed:\n %s" % "\n".join(packages))
-                raise ConanException(
-                    "Aborted due to CONAN_SYSREQUIRES_MODE=%s. Some system packages need to be installed" % mode
-                )
+                self._output.error("The following packages need to be installed:\n %s"
+                                   % "\n".join(packages))
+                raise ConanException("Aborted due to CONAN_SYSREQUIRES_MODE=%s. "
+                                     "Some system packages need to be installed" % mode)
 
         if not force and self._installed(packages):
             return
@@ -99,13 +123,31 @@ class SystemPackageTool(object):
             self.update()
         self._install_any(packages)
 
+    def _get_package_names(self, packages, arch_names):
+        """ Parse package names according it architecture
+
+        :param packages: list with all package to be installed e.g. ["libusb-dev libfoobar-dev"]
+        :param arch_names: Package suffix/prefix name used by installer tool
+        :return: list with all parsed names e.g. ["libusb-dev:armhf libfoobar-dev:armhf"]
+        """
+        if self._conanfile and self._conanfile.settings and cross_building(self._conanfile.settings):
+            _, build_arch, _, host_arch = get_cross_building_settings(self._conanfile.settings)
+            arch = host_arch or build_arch
+            parsed_packages = []
+            for package in packages:
+                for package_name in package.split(" "):
+                    parsed_packages.append(self._tool.get_package_name(package_name, arch,
+                                                                       arch_names))
+            return parsed_packages
+        return packages
+
     def _installed(self, packages):
         if not packages:
             return True
 
         for pkg in packages:
             if self._tool.installed(pkg):
-                _global_output.info("Package already installed: %s" % pkg)
+                self._output.info("Package already installed: %s" % pkg)
                 return True
         return False
 
@@ -120,7 +162,22 @@ class SystemPackageTool(object):
         raise ConanException("Could not install any of %s" % packages)
 
 
-class NullTool(object):
+class BaseTool(object):
+    def __init__(self, output=None):
+        self._output = default_output(output, 'conans.client.tools.system_pm.BaseTool')
+
+    def get_package_name(self, package, arch, arch_names):
+        """ Retrieve package name to installed according the target arch.
+
+        :param package: Regular package name e.g libusb-dev
+        :param arch: Host arch from Conanfile.settings
+        :param arch_names: Dictionary with suffix/prefix names e.g {"x86_64": "amd64"}
+        :return: Package name for Tool e.g. libusb-dev:i386
+        """
+        return package
+
+
+class NullTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         pass
 
@@ -128,100 +185,137 @@ class NullTool(object):
         pass
 
     def install(self, package_name):
-        _global_output.warn("Only available for linux with apt-get, yum, or pacman or OSX with brew or "
-                            "FreeBSD with pkg or Solaris with pkgutil")
+        self._output.warn("Only available for linux with apt-get, yum, or pacman or OSX with brew or"
+                          " FreeBSD with pkg or Solaris with pkgutil")
 
     def installed(self, package_name):
         return False
 
 
-class AptTool(object):
+class AptTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
-        _run(self._runner, "%sapt-add-repository %s" % (self._sudo_str, repository))
+        _run(self._runner, "%sapt-add-repository %s" % (self._sudo_str, repository),
+             output=self._output)
         if repo_key:
-            _run(self._runner, "wget -qO - %s | %sapt-key add -" % (repo_key, self._sudo_str))
+            _run(self._runner, "wget -qO - %s | %sapt-key add -" % (repo_key, self._sudo_str),
+                 output=self._output)
 
     def update(self):
-        _run(self._runner, "%sapt-get update" % self._sudo_str)
+        _run(self._runner, "%sapt-get update" % self._sudo_str, output=self._output)
 
     def install(self, package_name):
         recommends_str = '' if self._recommends else '--no-install-recommends '
-        _run(self._runner, "%sapt-get install -y %s%s" % (self._sudo_str, recommends_str, package_name))
+        _run(self._runner,
+             "%sapt-get install -y %s%s" % (self._sudo_str, recommends_str, package_name),
+             output=self._output)
 
     def installed(self, package_name):
-        exit_code = self._runner("dpkg-query -W -f='${Status}' %s | grep -q \"ok installed\"" % package_name, None)
+        exit_code = self._runner("dpkg-query -W -f='${Status}' %s | grep -q \"ok installed\""
+                                 % package_name, None)
         return exit_code == 0
 
+    def get_package_name(self, package, arch, arch_names):
+        if arch_names is None:
+            arch_names = {"x86_64": "amd64",
+                         "x86": "i386",
+                         "ppc32": "powerpc",
+                         "ppc64le": "ppc64el",
+                         "armv7": "arm",
+                         "armv7hf": "armhf",
+                         "armv8": "arm64",
+                         "s390x": "s390x"}
+        if arch in arch_names:
+            return "%s:%s" % (package, arch_names[arch])
+        return package
 
-class YumTool(object):
+
+class YumTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("YumTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "%syum update" % self._sudo_str, accepted_returns=[0, 100])
+        _run(self._runner, "%syum check-update -y" % self._sudo_str, accepted_returns=[0, 100],
+             output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "%syum install -y %s" % (self._sudo_str, package_name))
+        _run(self._runner, "%syum install -y %s" % (self._sudo_str, package_name),
+             output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner("rpm -q %s" % package_name, None)
         return exit_code == 0
 
+    def get_package_name(self, package, arch, arch_names):
+        if arch_names is None:
+            arch_names = {"x86_64": "x86_64",
+                         "x86": "i?86",
+                         "ppc32": "powerpc",
+                         "ppc64le": "ppc64le",
+                         "armv7": "armv7",
+                         "armv7hf": "armv7hl",
+                         "armv8": "aarch64",
+                         "s390x": "s390x"}
+        if arch in arch_names:
+            return "%s.%s" % (package, arch_names[arch])
+        return package
 
-class BrewTool(object):
+
+class BrewTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("BrewTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "brew update")
+        _run(self._runner, "brew update", output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "brew install %s" % package_name)
+        _run(self._runner, "brew install %s" % package_name, output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner('test -n "$(brew ls --versions %s)"' % package_name, None)
         return exit_code == 0
 
 
-class PkgTool(object):
+class PkgTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("PkgTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "%spkg update" % self._sudo_str)
+        _run(self._runner, "%spkg update" % self._sudo_str, output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "%spkg install -y %s" % (self._sudo_str, package_name))
+        _run(self._runner, "%spkg install -y %s" % (self._sudo_str, package_name),
+             output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner("pkg info %s" % package_name, None)
         return exit_code == 0
 
 
-class PkgUtilTool(object):
+class PkgUtilTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("PkgUtilTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "%spkgutil --catalog" % self._sudo_str)
+        _run(self._runner, "%spkgutil --catalog" % self._sudo_str, output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "%spkgutil --install --yes %s" % (self._sudo_str, package_name))
+        _run(self._runner, "%spkgutil --install --yes %s" % (self._sudo_str, package_name),
+             output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner('test -n "`pkgutil --list %s`"' % package_name, None)
         return exit_code == 0
 
 
-class ChocolateyTool(object):
+class ChocolateyTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("ChocolateyTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "choco outdated")
+        _run(self._runner, "choco outdated", output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "choco install --yes %s" % package_name)
+        _run(self._runner, "choco install --yes %s" % package_name, output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner('choco search --local-only --exact %s | '
@@ -229,38 +323,54 @@ class ChocolateyTool(object):
         return exit_code == 0
 
 
-class PacManTool(object):
+class PacManTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("PacManTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "%spacman -Syyu --noconfirm" % self._sudo_str)
+        _run(self._runner, "%spacman -Syyu --noconfirm" % self._sudo_str, output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "%spacman -S --noconfirm %s" % (self._sudo_str, package_name))
+        _run(self._runner, "%spacman -S --noconfirm %s" % (self._sudo_str, package_name),
+             output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner("pacman -Qi %s" % package_name, None)
         return exit_code == 0
 
+    def get_package_name(self, package, arch, arch_names):
+        if arch_names is None:
+            arch_names = {"x86": "lib32"}
+        if arch in arch_names:
+            return "%s-%s" % (arch_names[arch], package)
+        return package
 
-class ZypperTool(object):
+
+class ZypperTool(BaseTool):
     def add_repository(self, repository, repo_key=None):
         raise ConanException("ZypperTool::add_repository not implemented")
 
     def update(self):
-        _run(self._runner, "%szypper --non-interactive ref" % self._sudo_str)
+        _run(self._runner, "%szypper --non-interactive ref" % self._sudo_str, output=self._output)
 
     def install(self, package_name):
-        _run(self._runner, "%szypper --non-interactive in %s" % (self._sudo_str, package_name))
+        _run(self._runner, "%szypper --non-interactive in %s" % (self._sudo_str, package_name),
+             output=self._output)
 
     def installed(self, package_name):
         exit_code = self._runner("rpm -q %s" % package_name, None)
         return exit_code == 0
 
+    def get_package_name(self, package, arch, arch_names):
+        if arch_names is None:
+            arch_names = {"x86": "i586"}
+        if arch in arch_names:
+            return "%s.%s" % (arch_names[arch], package)
+        return package
 
-def _run(runner, command, accepted_returns=None):
+
+def _run(runner, command, output, accepted_returns=None):
     accepted_returns = accepted_returns or [0, ]
-    _global_output.info("Running: %s" % command)
+    output.info("Running: %s" % command)
     if runner(command, True) not in accepted_returns:
         raise ConanException("Command '%s' failed" % command)

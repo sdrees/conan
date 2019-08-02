@@ -1,8 +1,10 @@
-import fasteners
-from conans.util.log import logger
-import time
-from conans.util.files import save, load
 import os
+import time
+
+import fasteners
+
+from conans.util.files import load, save
+from conans.util.log import logger
 
 
 class NoLock(object):
@@ -48,7 +50,7 @@ class Lock(object):
 
     @property
     def files(self):
-        return (self._count_file, self._count_lock_file)
+        return self._count_file, self._count_lock_file
 
     def _info_locked(self):
         if self._first_lock:
@@ -61,6 +63,9 @@ class Lock(object):
         try:
             return int(load(self._count_file))
         except IOError:
+            return 0
+        except (UnicodeEncodeError, ValueError):
+            self._output.warn("%s does not contain a number!" % self._count_file)
             return 0
 
 
@@ -97,3 +102,19 @@ class WriteLock(Lock):
     def __exit__(self, exc_type, exc_val, exc_tb):  # @UnusedVariable
         with fasteners.InterProcessLock(self._count_lock_file, logger=logger):
             save(self._count_file, "0")
+
+        if exc_type is not None:
+            # If there was an exception while locking this, might be empty
+            # Try to clean up the trailing filelocks
+            try:
+                os.remove(self._count_file)
+                os.remove(self._count_lock_file)
+                path = os.path.dirname(self._count_file)
+                for _ in range(3):
+                    try:  # Take advantage that os.rmdir does not delete non-empty dirs
+                        os.rmdir(path)
+                    except Exception:
+                        break  # not empty
+                    path = os.path.dirname(path)
+            except Exception:
+                pass

@@ -1,11 +1,12 @@
-import unittest
-from conans.test.utils.tools import TestClient
-from conans.test.utils.cpp_test_files import cpp_hello_conan_files
-from conans.paths import CONANFILE, CONANINFO
-from conans.model.ref import ConanFileReference
-from conans.util.files import load
 import os
-from conans import tools
+import unittest
+
+from conans.client import tools
+from conans.model.ref import ConanFileReference
+from conans.paths import CONANFILE, CONANINFO
+from conans.test.utils.cpp_test_files import cpp_hello_conan_files
+from conans.test.utils.tools import TestClient
+from conans.util.files import load
 
 
 class SettingsOverrideTest(unittest.TestCase):
@@ -30,17 +31,17 @@ class SettingsOverrideTest(unittest.TestCase):
                         "-s MinGWBuild:compiler='gcc' -s MinGWBuild:compiler.libcxx='libstdc++' "
                         "-s MinGWBuild:compiler.version=4.8")
 
-        self.assertIn("COMPILER=> MinGWBuild gcc", self.client.user_io.out)
-        self.assertIn("COMPILER=> VisualBuild Visual Studio", self.client.user_io.out)
+        self.assertIn("COMPILER=> MinGWBuild gcc", self.client.out)
+        self.assertIn("COMPILER=> VisualBuild Visual Studio", self.client.out)
 
         # CHECK CONANINFO FILE
-        packs_dir = self.client.paths.packages(ConanFileReference.loads("MinGWBuild/0.1@lasote/testing"))
+        packs_dir = self.client.cache.package_layout(ConanFileReference.loads("MinGWBuild/0.1@lasote/testing")).packages()
         pack_dir = os.path.join(packs_dir, os.listdir(packs_dir)[0])
         conaninfo = load(os.path.join(pack_dir, CONANINFO))
         self.assertIn("compiler=gcc", conaninfo)
 
         # CHECK CONANINFO FILE
-        packs_dir = self.client.paths.packages(ConanFileReference.loads("VisualBuild/0.1@lasote/testing"))
+        packs_dir = self.client.cache.package_layout(ConanFileReference.loads("VisualBuild/0.1@lasote/testing")).packages()
         pack_dir = os.path.join(packs_dir, os.listdir(packs_dir)[0])
         conaninfo = load(os.path.join(pack_dir, CONANINFO))
         self.assertIn("compiler=Visual Studio", conaninfo)
@@ -53,8 +54,8 @@ class SettingsOverrideTest(unittest.TestCase):
         self.client.run("export . lasote/testing")
         self.client.run("install VisualBuild/0.1@lasote/testing --build missing -s compiler='Visual Studio' "
                         "-s compiler.version=14 -s compiler.runtime=MD "
-                        "-s MinGWBuild:missingsetting='gcc' ", ignore_error=True)
-        self.assertIn("settings.missingsetting' doesn't exist", self.client.user_io.out)
+                        "-s MinGWBuild:missingsetting='gcc' ", assert_error=True)
+        self.assertIn("settings.missingsetting' doesn't exist", self.client.out)
 
     def test_override_in_non_existing_recipe(self):
         files = cpp_hello_conan_files(name="VisualBuild",
@@ -66,8 +67,8 @@ class SettingsOverrideTest(unittest.TestCase):
                         "-s compiler.version=14 -s compiler.runtime=MD "
                         "-s MISSINGID:compiler='gcc' ")
 
-        self.assertIn("COMPILER=> MinGWBuild Visual Studio", self.client.user_io.out)
-        self.assertIn("COMPILER=> VisualBuild Visual Studio", self.client.user_io.out)
+        self.assertIn("COMPILER=> MinGWBuild Visual Studio", self.client.out)
+        self.assertIn("COMPILER=> VisualBuild Visual Studio", self.client.out)
 
     def test_override_setting_with_env_variables(self):
         files = cpp_hello_conan_files(name="VisualBuild",
@@ -80,7 +81,7 @@ class SettingsOverrideTest(unittest.TestCase):
                                        "CONAN_ENV_COMPILER_RUNTIME": "MD"}):
             self.client.run("install VisualBuild/0.1@lasote/testing --build missing")
 
-        self.assertIn("COMPILER=> MinGWBuild Visual Studio", self.client.user_io.out)
+        self.assertIn("COMPILER=> MinGWBuild Visual Studio", self.client.out)
 
     def _patch_build_to_print_compiler(self, files):
         files[CONANFILE] = files[CONANFILE] + '''

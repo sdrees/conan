@@ -1,17 +1,21 @@
-import os
-import shutil
-import tempfile
-from contextlib import contextmanager
-from errno import ENOENT, EEXIST
+import errno
 import hashlib
-import sys
-from os.path import abspath, realpath, join as joinpath
+import os
 import platform
 import re
-import six
-from conans.util.log import logger
-import tarfile
+import shutil
 import stat
+import sys
+import tarfile
+import tempfile
+
+
+from os.path import abspath, join as joinpath, realpath
+from contextlib import contextmanager
+
+import six
+
+from conans.util.log import logger
 
 
 def walk(top, **kwargs):
@@ -53,14 +57,38 @@ def is_dirty(folder):
     return os.path.exists(dirty_file)
 
 
+@contextmanager
+def set_dirty_context_manager(folder):
+    set_dirty(folder)
+    yield
+    clean_dirty(folder)
+
+
 def decode_text(text):
+    import codecs
+    encodings = {codecs.BOM_UTF8: "utf_8_sig",
+                 codecs.BOM_UTF16_BE: "utf_16_be",
+                 codecs.BOM_UTF16_LE: "utf_16_le",
+                 codecs.BOM_UTF32_BE: "utf_32_be",
+                 codecs.BOM_UTF32_LE: "utf_32_le",
+                 b'\x2b\x2f\x76\x38': "utf_7",
+                 b'\x2b\x2f\x76\x39': "utf_7",
+                 b'\x2b\x2f\x76\x2b': "utf_7",
+                 b'\x2b\x2f\x76\x2f': "utf_7",
+                 b'\x2b\x2f\x76\x38\x2d': "utf_7"}
+    for bom in sorted(encodings, key=len, reverse=True):
+        if text.startswith(bom):
+            try:
+                return text[len(bom):].decode(encodings[bom])
+            except UnicodeDecodeError:
+                continue
     decoders = ["utf-8", "Windows-1252"]
     for decoder in decoders:
         try:
             return text.decode(decoder)
         except UnicodeDecodeError:
             continue
-    logger.warn("can't decode %s" % str(text))
+    logger.warning("can't decode %s" % str(text))
     return text.decode("utf-8", "ignore")  # Ignore not compatible characters
 
 
@@ -71,7 +99,10 @@ def touch(fname, times=None):
 def touch_folder(folder):
     for dirname, _, filenames in walk(folder):
         for fname in filenames:
-            os.utime(os.path.join(dirname, fname), None)
+            try:
+                os.utime(os.path.join(dirname, fname), None)
+            except Exception:
+                pass
 
 
 def normalize(text):
@@ -118,7 +149,7 @@ def _generic_algorithm_sum(file_path, algorithm_name):
 def save_append(path, content):
     try:
         os.makedirs(os.path.dirname(path))
-    except:
+    except Exception:
         pass
 
     with open(path, "ab") as handle:
@@ -135,7 +166,7 @@ def save(path, content, only_if_modified=False):
     """
     try:
         os.makedirs(os.path.dirname(path))
-    except:
+    except Exception:
         pass
 
     new_content = to_file_bytes(content)
@@ -153,23 +184,6 @@ def mkdir_tmp():
     return tempfile.mkdtemp(suffix='tmp_conan')
 
 
-@contextmanager
-def tmp_file(contents):
-    """ Usage:
-
-    with tmp_file("mycontents") as filepath:
-        # Here exists filepath tmp file with "mycontents" inside
-
-    """
-    try:
-        tmp_dir = mkdir_tmp()
-        path = os.path.join(tmp_dir, "t")
-        save(path, contents)
-        yield path
-    finally:
-        rmdir(tmp_dir)
-
-
 def to_file_bytes(content):
     if six.PY3:
         if not isinstance(content, bytes):
@@ -185,14 +199,14 @@ def save_files(path, files, only_if_modified=False):
 
 
 def load(path, binary=False):
-    '''Loads a file content'''
+    """ Loads a file content """
     with open(path, 'rb') as handle:
         tmp = handle.read()
         return tmp if binary else decode_text(tmp)
 
 
 def relative_dirs(path):
-    ''' Walks a dir and return a list with the relative paths '''
+    """ Walks a dir and return a list with the relative paths """
     ret = []
     for dirpath, _, fnames in walk(path):
         for filename in fnames:
@@ -222,18 +236,28 @@ def rmdir(path):
     try:
         shutil.rmtree(path, onerror=_change_permissions)
     except OSError as err:
-        if err.errno == ENOENT:
+        if err.errno == errno.ENOENT:
+            return
+        raise
+
+
+def remove(path):
+    try:
+        assert os.path.isfile(path)
+        os.remove(path)
+    except (IOError, OSError) as e:  # for py3, handle just PermissionError
+        if e.errno == errno.EPERM or e.errno == errno.EACCES:
+            os.chmod(path, stat.S_IRWXU)
+            os.remove(path)
             return
         raise
 
 
 def mkdir(path):
     """Recursive mkdir, doesnt fail if already existing"""
-    try:
-        os.makedirs(path)
-    except OSError as err:
-        if err.errno != EEXIST:
-            raise
+    if os.path.exists(path):
+        return
+    os.makedirs(path)
 
 
 def path_exists(path, basedir):
@@ -288,7 +312,7 @@ def gzopen_without_timestamps(name, mode="r", fileobj=None, compresslevel=None, 
         if mode == 'r':
             raise ReadError("not a gzip file")
         raise
-    except:
+    except Exception:
         fileobj.close()
         raise
     t._extfileobj = False
@@ -303,7 +327,7 @@ def tar_extract(fileobj, destination_dir):
         return not realpath(abspath(joinpath(base, path))).startswith(base)
 
     def safemembers(members):
-        base = realpath(abspath("."))
+        base = realpath(abspath(destination_dir))
 
         for finfo in members:
             if badpath(finfo.name, base) or finfo.islnk():
@@ -337,5 +361,5 @@ def list_folder_subdirs(basedir, level):
 def exception_message_safe(exc):
     try:
         return str(exc)
-    except:
+    except Exception:
         return decode_text(repr(exc))

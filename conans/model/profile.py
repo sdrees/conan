@@ -1,7 +1,8 @@
 import copy
-from collections import OrderedDict
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 
+from conans.client import settings_preprocessor
+from conans.errors import ConanException
 from conans.model.env_info import EnvValues
 from conans.model.options import OptionsValues
 from conans.model.values import Values
@@ -12,23 +13,54 @@ class Profile(object):
     """
 
     def __init__(self):
-        # Sections
+        # Input sections, as defined by user profile files and command line
         self.settings = OrderedDict()
         self.package_settings = defaultdict(OrderedDict)
         self.env_values = EnvValues()
         self.options = OptionsValues()
-        self.build_requires = OrderedDict()  # conan_ref Pattern: list of conan_ref
+        self.build_requires = OrderedDict()  # ref pattern: list of ref
+
+        # Cached processed values
+        self.processed_settings = None  # Settings with values, and smart completion
+        self._user_options = None
+        self._package_settings_values = None
+        self.dev_reference = None  # Reference of the package being develop
 
     @property
-    def settings_values(self):
-        return Values.from_list(list(self.settings.items()))
+    def user_options(self):
+        if self._user_options is None:
+            self._user_options = self.options.copy()
+        return self._user_options
 
     @property
     def package_settings_values(self):
-        result = {}
-        for pkg, settings in self.package_settings.items():
-            result[pkg] = list(settings.items())
-        return result
+        if self._package_settings_values is None:
+            self._package_settings_values = {}
+            for pkg, settings in self.package_settings.items():
+                self._package_settings_values[pkg] = list(settings.items())
+        return self._package_settings_values
+
+    def process_settings(self, cache, preprocess=True):
+        self.processed_settings = cache.settings.copy()
+        self.processed_settings.values = Values.from_list(list(self.settings.items()))
+        if preprocess:
+            settings_preprocessor.preprocess(self.processed_settings)
+            # Redefine the profile settings values with the preprocessed ones
+            # FIXME: Simplify the values.as_list()
+            self.settings = OrderedDict(self.processed_settings.values.as_list())
+
+            # Preprocess also scoped settings
+            for pkg, pkg_settings in self.package_settings.items():
+                pkg_profile = Profile()
+                pkg_profile.settings = self.settings
+                pkg_profile.update_settings(pkg_settings)
+                try:
+                    pkg_profile.process_settings(cache=cache, preprocess=True)
+                except Exception as e:
+                    pkg_profile = ["{}={}".format(k, v) for k, v in pkg_profile.settings.items()]
+                    raise ConanException("Error in resulting settings for package"
+                                         " '{}': {}\n{}".format(pkg, e, '\n'.join(pkg_profile)))
+                # TODO: Assign the _validated_ settings and do not compute again
 
     def dumps(self):
         result = ["[settings]"]
@@ -70,7 +102,8 @@ class Profile(object):
         res = copy.copy(self.settings)
         if new_settings:
             # Invalidate the current subsettings if the parent setting changes
-            # Example: new_settings declare a different "compiler", so invalidate the current "compiler.XXX"
+            # Example: new_settings declare a different "compiler",
+            # so invalidate the current "compiler.XXX"
             for name, value in new_settings.items():
                 if "." not in name:
                     if name in self.settings and self.settings[name] != value:

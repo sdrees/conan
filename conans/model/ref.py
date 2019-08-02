@@ -1,8 +1,87 @@
-from collections import namedtuple
 import re
+from collections import namedtuple
+
 from six import string_types
+
 from conans.errors import ConanException, InvalidNameException
 from conans.model.version import Version
+
+
+def _split_pair(pair, split_char):
+    if not pair or pair == split_char:
+        return None, None
+    if split_char not in pair:
+        return None
+
+    words = pair.split(split_char)
+    if len(words) != 2:
+        raise ConanException("The reference has too many '{}'".format(split_char))
+    else:
+        return words
+
+
+def _noneize(text):
+    if not text or text == "None":
+        return None
+    return text
+
+
+def get_reference_fields(arg_reference, user_channel_input=False):
+    # FIXME: The partial references meaning user/channel should be disambiguated at 2.0
+    """
+    :param arg_reference: String with a complete reference, or
+        only user/channel (if user_channel_input)
+        only name/version (if not pattern_is_user_channel)
+    :param user_channel_input: Two items means user/channel or not.
+    :return: name, version, user and channel, in a tuple
+    """
+
+    if not arg_reference:
+        return None, None, None, None, None
+
+    revision = None
+
+    if "#" in arg_reference:
+        tmp = arg_reference.split("#", 1)
+        revision = tmp[1]
+        arg_reference = tmp[0]
+
+    if "@" in arg_reference:
+        name_version, user_channel = _split_pair(arg_reference, "@")
+        # FIXME: Conan 2.0
+        #  In conan now "xxx@conan/stable" means that xxx is the version, I would say it should
+        #  be the name
+        name, version = _split_pair(name_version, "/") or (None, name_version)
+        user, channel = _split_pair(user_channel, "/") or (user_channel, None)
+
+        return _noneize(name), _noneize(version), _noneize(user), _noneize(channel), \
+               _noneize(revision)
+    else:
+        if user_channel_input:
+            # x/y is user and channel
+            el1, el2 = _split_pair(arg_reference, "/") or (arg_reference, None)
+            return None, None, _noneize(el1), _noneize(el2), _noneize(revision)
+        else:
+            # x/y is name and version
+            el1, el2 = _split_pair(arg_reference, "/") or (arg_reference, None)
+            return _noneize(el1), _noneize(el2), None, None, _noneize(revision)
+
+
+def check_valid_ref(reference, strict_mode=True):
+    """
+    :param strict_mode: Only if the reference contains the "@" is valid, used to disambiguate"""
+    try:
+
+        if not reference:
+            return False
+        if strict_mode and "@" not in reference:
+            return False
+        if strict_mode and "*" in reference:
+            return False
+        ConanFileReference.loads(reference, validate=True)
+        return True
+    except ConanException:
+        return False
 
 
 class ConanName(object):
@@ -10,6 +89,8 @@ class ConanName(object):
     _min_chars = 2
     _validation_pattern = re.compile("^[a-zA-Z0-9_][a-zA-Z0-9_\+\.-]{%s,%s}$"
                                      % (_min_chars - 1, _max_chars - 1))
+
+    _validation_revision_pattern = re.compile("^[a-zA-Z0-9]{1,%s}$" % _max_chars)
 
     @staticmethod
     def invalid_name_message(value, reference_token=None):
@@ -52,14 +133,18 @@ class ConanName(object):
                 return
             ConanName.invalid_name_message(name, reference_token=reference_token)
 
+    @staticmethod
+    def validate_revision(revision):
+        if ConanName._validation_revision_pattern.match(revision) is None:
+            raise InvalidNameException("The revision field, must contain only letters "
+                                       "and numbers with a length between 1 and "
+                                       "%s" % ConanName._max_chars)
 
-class ConanFileReference(namedtuple("ConanFileReference", "name version user channel")):
+
+class ConanFileReference(namedtuple("ConanFileReference", "name version user channel revision")):
     """ Full reference of a package recipes, e.g.:
     opencv/2.4.10@lasote/testing
     """
-    whitespace_pattern = re.compile(r"\s+")
-    sep_pattern = re.compile("@|/|#")
-    revision = None
 
     def __new__(cls, name, version, user, channel, revision=None, validate=True):
         """Simple name creation.
@@ -69,113 +154,150 @@ class ConanFileReference(namedtuple("ConanFileReference", "name version user cha
         @param channel:     string containing the user channel
         @param revision:    string containing the revision (optional)
         """
-        version = Version(version)
-        obj = super(cls, ConanFileReference).__new__(cls, name, version, user, channel)
-        obj.revision = revision
+        if (user and not channel) or (channel and not user):
+            raise InvalidNameException("Specify the 'user' and the 'channel' or neither of them")
+
+        version = Version(version) if version is not None else None
+        obj = super(cls, ConanFileReference).__new__(cls, name, version, user, channel, revision)
         if validate:
-            obj.validate()
+            obj._validate()
         return obj
 
-    def validate(self):
-        ConanName.validate_name(self.name, reference_token="package name")
-        ConanName.validate_name(self.version, True, reference_token="package version")
-        ConanName.validate_name(self.user, reference_token="user name")
-        ConanName.validate_name(self.channel, reference_token="channel")
-        if self.revision:
-            ConanName.validate_name(self.revision, reference_token="revision")
+    def _validate(self):
+        if self.name is not None:
+            ConanName.validate_name(self.name, reference_token="package name")
+        if self.version is not None:
+            ConanName.validate_name(self.version, True, reference_token="package version")
+        if self.user is not None:
+            ConanName.validate_name(self.user, reference_token="user name")
+        if self.channel is not None:
+            ConanName.validate_name(self.channel, reference_token="channel")
+        if self.revision is not None:
+            ConanName.validate_revision(self.revision)
 
-    def __eq__(self, value):
-        if not value:
-            return False
-        return super(ConanFileReference, self).__eq__(value) and self.revision == value.revision
+        if not self.name or not self.version:
+            raise InvalidNameException("Specify the 'name' and the 'version'")
 
-    def __ne__(self, other):
-        """Overrides the default implementation (unnecessary in Python 3)"""
-        return not self.__eq__(other)
-
-    def __hash__(self):
-        return hash((self.name, self.version, self.user, self.channel, self.revision))
+        if (self.user and not self.channel) or (self.channel and not self.user):
+            raise InvalidNameException("Specify the 'user' and the 'channel' or neither of them")
 
     @staticmethod
     def loads(text, validate=True):
         """ Parses a text string to generate a ConanFileReference object
         """
-        text = ConanFileReference.whitespace_pattern.sub("", text)
-        tokens = ConanFileReference.sep_pattern.split(text)
-        try:
-            if len(tokens) not in (4, 5):
-                raise ValueError
-            name, version, user, channel = tokens[0:4]
-            revision = tokens[4] if len(tokens) == 5 else None
-        except ValueError:
-            raise ConanException("Wrong package recipe reference %s\nWrite something like "
-                                 "OpenCV/1.0.6@user/stable" % text)
-        obj = ConanFileReference(name, version, user, channel, revision, validate=validate)
-        return obj
+        name, version, user, channel, revision = get_reference_fields(text)
+        ref = ConanFileReference(name, version, user, channel, revision, validate=validate)
+        return ref
 
-    def __repr__(self):
+    @staticmethod
+    def load_dir_repr(dir_repr):
+        name, version, user, channel = dir_repr.split("/")
+        if user == "_":
+            user = None
+        if channel == "_":
+            channel = None
+        return ConanFileReference(name, version, user, channel)
+
+    def __str__(self):
+        if self.name is None and self.version is None:
+            return ""
+        if self.user is None and self.channel is None:
+            return "%s/%s" % (self.name, self.version)
         return "%s/%s@%s/%s" % (self.name, self.version, self.user, self.channel)
 
-    def full_repr(self):
+    def __repr__(self):
+        str_rev = "#%s" % self.revision if self.revision else ""
+        return "%s/%s@%s/%s%s" % (self.name, self.version, self.user, self.channel, str_rev)
+
+    def full_str(self):
         str_rev = "#%s" % self.revision if self.revision else ""
         return "%s%s" % (str(self), str_rev)
 
-    def copy_with_revision(self, revision):
-        tmp = ConanFileReference.loads(str(self))
-        tmp.revision = revision
-        return tmp
+    def dir_repr(self):
+        return "/".join([self.name, self.version, self.user or "_", self.channel or "_"])
 
-    def copy_without_revision(self):
-        ret = ConanFileReference.loads(str(self))
-        ret.revision = None
-        return ret
+    def copy_with_rev(self, revision):
+        return ConanFileReference(self.name, self.version, self.user, self.channel, revision,
+                                  validate=False)
+
+    def copy_clear_rev(self):
+        return ConanFileReference(self.name, self.version, self.user, self.channel, None,
+                                  validate=False)
+
+    def __lt__(self, other):
+        def de_noneize(ref):
+            return ref.name, ref.version, ref.user or "", ref.channel or "", ref.revision or ""
+
+        return de_noneize(self) < de_noneize(other)
+
+    def is_compatible_with(self, new_ref):
+        """Returns true if the new_ref is completing the RREV field of this object but
+         having the rest equal """
+        if repr(self) == repr(new_ref):
+            return True
+        if self.copy_clear_rev() != new_ref.copy_clear_rev():
+            return False
+
+        return self.revision is None
 
 
-class PackageReference(namedtuple("PackageReference", "conan package_id")):
+class PackageReference(namedtuple("PackageReference", "ref id revision")):
     """ Full package reference, e.g.:
     opencv/2.4.10@lasote/testing, fe566a677f77734ae
     """
-    revision = None
 
-    def __new__(cls, conan, package_id, validate=True):
-        revision = None
+    def __new__(cls, ref, package_id, revision=None, validate=True):
         if "#" in package_id:
             package_id, revision = package_id.rsplit("#", 1)
-        obj = super(cls, PackageReference).__new__(cls, conan, package_id)
-        obj.revision = revision
+        obj = super(cls, PackageReference).__new__(cls, ref, package_id, revision)
         if validate:
             obj.validate()
         return obj
 
     def validate(self):
         if self.revision:
-            ConanName.validate_name(self.revision, reference_token="revision")
+            ConanName.validate_revision(self.revision)
 
     @staticmethod
     def loads(text, validate=True):
         text = text.strip()
         tmp = text.split(":")
         try:
-            conan = ConanFileReference.loads(tmp[0].strip())
+            ref = ConanFileReference.loads(tmp[0].strip(), validate=validate)
             package_id = tmp[1].strip()
         except IndexError:
-            raise ConanException("Wrong package reference  %s" % text)
-        return PackageReference(conan, package_id, validate=validate)
+            raise ConanException("Wrong package reference %s" % text)
+        return PackageReference(ref, package_id, validate=validate)
 
     def __repr__(self):
-        return "%s:%s" % (self.conan, self.package_id)
-
-    def full_repr(self):
         str_rev = "#%s" % self.revision if self.revision else ""
-        return "%s%s" % (str(self), str_rev)
+        tmp = "%s:%s%s" % (repr(self.ref), self.id, str_rev)
+        return tmp
 
-    def copy_with_revisions(self, revision, p_revision):
-        ret = PackageReference(self.conan.copy_with_revision(revision), self.package_id)
-        ret.revision = p_revision
-        return ret
+    def __str__(self):
+        return "%s:%s" % (self.ref, self.id)
 
-    def copy_without_revision(self):
-        ret = PackageReference.loads(str(self))
-        ret.revision = None
-        ret.conan.revision = None
-        return ret
+    def full_str(self):
+        str_rev = "#%s" % self.revision if self.revision else ""
+        tmp = "%s:%s%s" % (self.ref.full_str(), self.id, str_rev)
+        return tmp
+
+    def copy_with_revs(self, revision, p_revision):
+        return PackageReference(self.ref.copy_with_rev(revision), self.id, p_revision)
+
+    def copy_clear_rev(self):
+        ref = self.ref.copy_clear_rev()
+        return PackageReference(ref, self.id, revision=None)
+
+    def copy_clear_revs(self):
+        return self.copy_with_revs(None, None)
+
+    def is_compatible_with(self, new_ref):
+        """Returns true if the new_ref is completing the PREV field of this object but
+         having the rest equal """
+        if repr(self) == repr(new_ref):
+            return True
+        if not self.ref.is_compatible_with(new_ref.ref) or self.id != new_ref.id:
+            return False
+
+        return self.revision is None  # Only the revision is different and we don't have one
