@@ -10,7 +10,6 @@ import sys
 import tempfile
 import threading
 import unittest
-import textwrap
 import uuid
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
@@ -596,6 +595,25 @@ class SVNLocalRepoTestCase(unittest.TestCase):
             shutil.rmtree(tmp_folder, ignore_errors=False, onerror=try_remove_readonly)
 
 
+class LocalDBMock(object):
+
+    def __init__(self, user=None, access_token=None, refresh_token=None):
+        self.user = user
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+    def get_login(self, _):
+        return self.user, self.access_token, self.refresh_token
+
+    def get_username(self, _):
+        return self.user
+
+    def store(self, user, access_token, refresh_token, _):
+        self.user = user
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+
+
 class MockedUserIO(UserIO):
 
     """
@@ -773,7 +791,7 @@ servers["r2"] = TestServer()
 
     def update_servers(self):
         cache = self.cache
-        Remotes().save(cache.registry_path)
+        Remotes().save(cache.remotes_path)
         registry = cache.registry
 
         for name, server in self.servers.items():
@@ -1217,12 +1235,12 @@ class TurboTestClient(TestClient):
     def create(self, ref, conanfile=GenConanfile(), args=None, assert_error=False):
         if conanfile:
             self.save({"conanfile.py": conanfile})
-        self.run("create . {} {} --json {}".format(ref.full_str(),
+        full_str = "{}@".format(ref.full_str()) if not ref.user else ref.full_str()
+        self.run("create . {} {} --json {}".format(full_str,
                                                    args or "", self.tmp_json_name),
                  assert_error=assert_error)
         rrev = self.cache.package_layout(ref).recipe_revision()
-        json_path = os.path.join(self.current_folder, self.tmp_json_name)
-        data = json.loads(load(json_path))
+        data = json.loads(self.load(self.tmp_json_name))
         if assert_error:
             return None
         package_id = data["installed"][0]["packages"][0]["id"]
@@ -1249,8 +1267,7 @@ class TurboTestClient(TestClient):
                                                        args or "", self.tmp_json_name),
                  assert_error=assert_error)
         rrev = self.cache.package_layout(ref).recipe_revision()
-        json_path = os.path.join(self.current_folder, self.tmp_json_name)
-        data = json.loads(load(json_path))
+        data = json.loads(self.load(self.tmp_json_name))
         if assert_error:
             return None
         package_id = data["installed"][0]["packages"][0]["id"]
@@ -1275,8 +1292,7 @@ class TurboTestClient(TestClient):
         self.run("search {} --json {} {} {}".format(pattern, self.tmp_json_name, remote,
                                                     args or ""),
                  assert_error=assert_error)
-        json_path = os.path.join(self.current_folder, self.tmp_json_name)
-        data = json.loads(load(json_path))
+        data = json.loads(self.load(self.tmp_json_name))
         return data
 
     def massive_uploader(self, ref, revisions, num_prev, remote=None):

@@ -1,5 +1,6 @@
 from conans.client.generators.cmake import DepsCppCmake
 from conans.client.generators.cmake_find_package_common import target_template
+from conans.client.generators.cmake_multi import extend
 from conans.model import Generator
 
 find_package_header = """
@@ -47,22 +48,28 @@ endif()
     @property
     def content(self):
         ret = {}
-        for depname, cpp_info in self.deps_build_info.dependencies:
-            ret["Find%s.cmake" % cpp_info.name] = self._find_for_dep(cpp_info.name, cpp_info)
+        for _, cpp_info in self.deps_build_info.dependencies:
+            depname = cpp_info.get_name("cmake_find_package")
+            ret["Find%s.cmake" % depname] = self._find_for_dep(depname, cpp_info)
         return ret
 
     def _find_for_dep(self, name, cpp_info):
-        deps = DepsCppCmake(cpp_info)
+        dep_cpp_info = cpp_info
+        build_type = self.conanfile.settings.get_safe("build_type")
+        if build_type:
+            dep_cpp_info = extend(dep_cpp_info, build_type.lower())
+
+        deps = DepsCppCmake(dep_cpp_info)
         lines = []
-        if cpp_info.public_deps:
+        if dep_cpp_info.public_deps:
             # Here we are generating FindXXX, so find_modules=True
-            public_deps_names = [self.deps_build_info[dep].name for dep in cpp_info.public_deps]
+            public_deps_names = [self.deps_build_info[dep].get_name("cmake_find_package") for dep in dep_cpp_info.public_deps]
             lines = find_dependency_lines(name, public_deps_names, find_modules=True)
-        find_package_header_block = find_package_header.format(name=name, version=cpp_info.version)
+        find_package_header_block = find_package_header.format(name=name, version=dep_cpp_info.version)
         find_libraries_block = target_template.format(name=name, deps=deps, build_type_suffix="")
         target_props = assign_target_properties.format(name=name, deps=deps)
         tmp = self.template.format(name=name, deps=deps,
-                                   version=cpp_info.version,
+                                   version=dep_cpp_info.version,
                                    find_dependencies_block="\n".join(lines),
                                    find_libraries_block=find_libraries_block,
                                    find_package_header_block=find_package_header_block,

@@ -35,24 +35,15 @@ class TestConan(ConanFile):
 
     def export_without_full_reference_test(self):
         client = TestClient()
-        client.save({"conanfile.py": """from conans import ConanFile
-class MyPkg(ConanFile):
-    pass
-"""})
+        client.save({"conanfile.py": GenConanfile()})
         client.run("export . lasote/stable", assert_error=True)
         self.assertIn("conanfile didn't specify name", client.out)
 
-        client.save({"conanfile.py": """from conans import ConanFile
-class MyPkg(ConanFile):
-    name="Lib"
-"""})
+        client.save({"conanfile.py": GenConanfile().with_name("Lib")})
         client.run("export . lasote/stable", assert_error=True)
         self.assertIn("conanfile didn't specify version", client.out)
 
-        client.save({"conanfile.py": """from conans import ConanFile
-class MyPkg(ConanFile):
-    pass
-"""})
+        client.save({"conanfile.py": GenConanfile()})
         client.run("export . lib/1.0@lasote/channel")
         self.assertIn("lib/1.0@lasote/channel: A new conanfile.py version was exported",
                       client.out)
@@ -68,14 +59,14 @@ class MyPkg(ConanFile):
 
     def test_export_read_only(self):
         client = TestClient()
-        conanfile = """
-from conans import ConanFile
-class TestConan(ConanFile):
-    name = "Hello"
-    version = "1.2"
-    exports = "file1.txt"
-    exports_sources = "file2.txt"
-"""
+        conanfile = textwrap.dedent("""
+            from conans import ConanFile
+            class TestConan(ConanFile):
+                name = "Hello"
+                version = "1.2"
+                exports = "file1.txt"
+                exports_sources = "file2.txt"
+            """)
         ref = ConanFileReference.loads("Hello/1.2@lasote/stable")
         export_path = client.cache.package_layout(ref).export()
         export_src_path = client.cache.package_layout(ref).export_sources()
@@ -86,8 +77,8 @@ class TestConan(ConanFile):
         client.save(files)
         mode1 = os.stat(os.path.join(client.current_folder, "file1.txt")).st_mode
         mode2 = os.stat(os.path.join(client.current_folder, "file2.txt")).st_mode
-        os.chmod(os.path.join(client.current_folder, "file1.txt"), mode1 &~ stat.S_IWRITE)
-        os.chmod(os.path.join(client.current_folder, "file2.txt"), mode2 &~ stat.S_IWRITE)
+        os.chmod(os.path.join(client.current_folder, "file1.txt"), mode1 & ~stat.S_IWRITE)
+        os.chmod(os.path.join(client.current_folder, "file2.txt"), mode2 & ~stat.S_IWRITE)
 
         client.run("export . lasote/stable")
         self.assertEqual(load(os.path.join(export_path, "file1.txt")), "")
@@ -114,8 +105,8 @@ class TestConan(ConanFile):
                  "file1.txt": "",
                  "file2.txt": ""}
         client.save(files)
-        os.chmod(os.path.join(client.current_folder, "file1.txt"), mode1 &~ stat.S_IWRITE)
-        os.chmod(os.path.join(client.current_folder, "file2.txt"), mode2 &~ stat.S_IWRITE)
+        os.chmod(os.path.join(client.current_folder, "file1.txt"), mode1 & ~stat.S_IWRITE)
+        os.chmod(os.path.join(client.current_folder, "file2.txt"), mode2 & ~stat.S_IWRITE)
         client.run("export . lasote/stable")
         self.assertEqual(load(os.path.join(export_path, "file1.txt")), "")
         self.assertEqual(load(os.path.join(export_src_path, "file2.txt")), "")
@@ -301,7 +292,7 @@ class OpenSSLConan(ConanFile):
     name = "openssl"
     version = "2.0.1"
 """
-        save(os.path.join(self.client.current_folder, CONANFILE), content)
+        self.client.save({CONANFILE: content})
         self.client.run("export . lasote/stable")
         ref = ConanFileReference.loads('openssl/2.0.1@lasote/stable')
         reg_path = self.client.cache.package_layout(ref).export()
@@ -316,7 +307,7 @@ class OpenSSLConan(ConanFile):
     version = "2.0.1"
     exports = ('*.txt', '*.h')
 """
-        save(os.path.join(self.client.current_folder, CONANFILE), content)
+        self.client.save({CONANFILE: content})
         self.client.run("export . lasote/stable")
         self.assertEqual(sorted(os.listdir(reg_path)),
                          ['CMakeLists.txt', CONANFILE, CONAN_MANIFEST,
@@ -331,7 +322,7 @@ class OpenSSLConan(ConanFile):
     version = "2.0.1"
     exports = ['*.txt', '*.h']
 """
-        save(os.path.join(self.client.current_folder, CONANFILE), content)
+        self.client.save({CONANFILE: content})
         self.client.run("export . lasote/stable")
         self.assertEqual(sorted(os.listdir(reg_path)),
                          ['CMakeLists.txt', CONANFILE, CONAN_MANIFEST, 'helloHello0.h'])
