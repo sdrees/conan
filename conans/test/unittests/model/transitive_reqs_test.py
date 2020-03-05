@@ -99,7 +99,7 @@ class GraphTest(unittest.TestCase):
         profile = test_profile(profile=profile)
         root_conan = self.retriever.root(str(content), profile)
         deps_graph = self.builder.load_graph(root_conan, False, False, self.remotes,
-                                             profile_host=profile)
+                                             profile_host=profile, profile_build=None)
 
         build_mode = BuildMode([], self.output)
         self.binaries_analyzer.evaluate_graph(deps_graph, build_mode=build_mode,
@@ -400,7 +400,11 @@ class ChatConan(ConanFile):
         self.retriever.save_recipe(say_ref2, say_content2)
         self.retriever.save_recipe(hello_ref, hello_content)
         self.retriever.save_recipe(bye_ref, bye_content2)
-        with six.assertRaisesRegex(self, ConanException, "Conflict in Bye/0.2@user/testing"):
+        with six.assertRaisesRegex(self, ConanException, "Conflict in Bye/0.2@user/testing:\n"
+                                   "    'Bye/0.2@user/testing' requires 'Say/0.2@user/testing' "
+                                   "while 'Hello/1.2@user/testing' requires 'Say/0.1@user/testing'.\n"
+                                   "    To fix this conflict you need to override the package 'Say'"
+                                   " in your root package."):
             self.build_graph(chat_content)
 
     def test_diamond_conflict(self):
@@ -417,7 +421,11 @@ class ChatConan(ConanFile):
         self.retriever.save_recipe(hello_ref, hello_content)
         self.retriever.save_recipe(bye_ref, bye_content2)
 
-        with six.assertRaisesRegex(self, ConanException, "Conflict in Bye/0.2@user/testing"):
+        with six.assertRaisesRegex(self, ConanException, "Conflict in Bye/0.2@user/testing:\n"
+                                   "    'Bye/0.2@user/testing' requires 'Say/0.2@user/testing'"
+                                   " while 'Hello/1.2@user/testing' requires 'Say/0.1@user/testing'.\n"
+                                   "    To fix this conflict you need to override the package 'Say'"
+                                   " in your root package."):
             self.build_graph(chat_content)
 
     def test_diamond_conflict_solved(self):
@@ -1476,7 +1484,8 @@ class ConsumerConan(ConanFile):
     def build_graph(self, content):
         profile = test_profile()
         root_conan = self.retriever.root(content, profile)
-        deps_graph = self.builder.load_graph(root_conan, False, False, None, profile_host=profile)
+        deps_graph = self.builder.load_graph(root_conan, False, False, None,
+                                             profile_host=profile, profile_build=None)
         return deps_graph
 
     def test_avoid_duplicate_expansion(self):
@@ -1496,7 +1505,11 @@ class LibDConan(ConanFile):
         libd_ref = ConanFileReference.loads("LibD/0.1@user/testing")
         self.retriever.save_recipe(libd_ref, libd_content)
 
-        with six.assertRaisesRegex(self, ConanException, "Conflict in LibB/0.1@user/testing"):
+        with six.assertRaisesRegex(self, ConanException, "Conflict in LibB/0.1@user/testing:\n"
+                                   "    'LibB/0.1@user/testing' requires 'LibA/0.2@user/testing' "
+                                   "while 'LibB/0.1@user/testing' requires 'LibA/0.1@user/testing'.\n"
+                                   "    To fix this conflict you need to override the package 'LibA' "
+                                   "in your root package."):
             self.build_graph(self.consumer_content)
         self.assertIn("LibB/0.1@user/testing: requirement LibA/0.1@user/testing overridden by "
                       "LibD/0.1@user/testing to LibA/0.2@user/testing", str(self.output))
@@ -1515,7 +1528,11 @@ class LibDConan(ConanFile):
         libd_ref = ConanFileReference.loads("LibD/0.1@user/testing")
         self.retriever.save_recipe(libd_ref, libd_content)
 
-        with six.assertRaisesRegex(self, ConanException, "Conflict in LibB/0.1@user/testing"):
+        with six.assertRaisesRegex(self, ConanException, "Conflict in LibB/0.1@user/testing:\n"
+                                   "    'LibB/0.1@user/testing' requires 'LibA/0.2@user/testing' "
+                                   "while 'LibB/0.1@user/testing' requires 'LibA/0.1@user/testing'.\n"
+                                   "    To fix this conflict you need to override the package 'LibA' in "
+                                   "your root package."):
             self.build_graph(self.consumer_content)
         self.assertEqual(1, str(self.output).count("LibA requirements()"))
         self.assertEqual(1, str(self.output).count("LibA configure()"))
@@ -1854,7 +1871,7 @@ class ChatConan(ConanFile):
         profile = test_profile(profile=profile)
         root_conan = self.retriever.root(chat_content, profile)
         deps_graph = self.builder.load_graph(root_conan, False, False, None,
-                                             profile_host=profile)
+                                             profile_host=profile, profile_build=None)
 
         build_mode = BuildMode([], self.output)
         self.binaries_analyzer.evaluate_graph(deps_graph, build_mode=build_mode,
