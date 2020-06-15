@@ -20,6 +20,7 @@ from conans.client.cmd.test import install_build_and_test
 from conans.client.cmd.uploader import CmdUpload
 from conans.client.cmd.user import user_set, users_clean, users_list, token_present
 from conans.client.conanfile.package import run_package_method
+from conans.client.conf.required_version import check_required_conan_version
 from conans.client.graph.graph import RECIPE_EDITABLE
 from conans.client.graph.graph_binaries import GraphBinariesAnalyzer
 from conans.client.graph.graph_manager import GraphManager
@@ -233,6 +234,7 @@ class ConanAPIV1(object):
         # Migration system
         migrator = ClientMigrator(self.cache_folder, Version(client_version), self.out)
         migrator.migrate()
+        check_required_conan_version(self.cache_folder, self.out)
         if not get_env(CONAN_V2_MODE_ENVVAR, False):
             # FIXME Remove in Conan 2.0
             sys.path.append(os.path.join(self.cache_folder, "python"))
@@ -532,7 +534,7 @@ class ConanAPIV1(object):
                          update=update, manifest_folder=manifest_folder,
                          manifest_verify=manifest_verify,
                          manifest_interactive=manifest_interactive,
-                         generators=generators, use_lock=lockfile, recorder=recorder)
+                         generators=generators, lockfile=lockfile, recorder=recorder)
             return recorder.get_info(self.app.config.revisions_enabled)
         except ConanException as exc:
             recorder.error = True
