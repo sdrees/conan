@@ -61,6 +61,8 @@ class ConanFileLoader(object):
             if self._pyreq_loader:
                 self._pyreq_loader.load_py_requires(conanfile, lock_python_requires, self)
 
+            conanfile.recipe_folder = os.path.dirname(conanfile_path)
+
             # If the scm is inherited, create my own instance
             if hasattr(conanfile, "scm") and "scm" not in conanfile.__class__.__dict__:
                 if isinstance(conanfile.scm, dict):
@@ -78,7 +80,8 @@ class ConanFileLoader(object):
                                                               module)
             result = conanfile(self._output, self._runner, display, user, channel)
             if hasattr(result, "init") and callable(result.init):
-                result.init()
+                with conanfile_exception_formatter(str(result), "init"):
+                    result.init()
             return result, module
         except ConanException as e:
             raise ConanException("Error loading conanfile at '{}': {}".format(conanfile_path, e))
@@ -113,7 +116,6 @@ class ConanFileLoader(object):
                                      % (version, conanfile.version))
             conanfile.version = version
 
-        conanfile.recipe_folder = os.path.dirname(conanfile_path)
         if hasattr(conanfile, "set_name"):
             with conanfile_exception_formatter("conanfile.py", "set_name"):
                 conanfile.set_name()
@@ -125,8 +127,6 @@ class ConanFileLoader(object):
             if version and version != conanfile.version:
                 raise ConanException("Package recipe with version %s!=%s"
                                      % (version, conanfile.version))
-        # Make sure this is nowhere else available
-        del conanfile.recipe_folder
 
         return conanfile
 
