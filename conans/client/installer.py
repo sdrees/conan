@@ -8,7 +8,7 @@ from conans.client import tools
 from conans.client.conanfile.build import run_build_method
 from conans.client.conanfile.package import run_package_method
 from conans.client.file_copier import report_copied_files
-from conans.client.generators import TXTGenerator, write_generators
+from conans.client.generators import TXTGenerator
 from conans.client.graph.graph import BINARY_BUILD, BINARY_CACHE, BINARY_DOWNLOAD, BINARY_EDITABLE, \
     BINARY_MISSING, BINARY_SKIP, BINARY_UPDATE, BINARY_UNKNOWN, CONTEXT_HOST
 from conans.client.importer import remove_imports, run_imports
@@ -22,6 +22,7 @@ from conans.client.tools.env import pythonpath
 from conans.errors import (ConanException, ConanExceptionInUserConanfileMethod,
                            conanfile_exception_formatter)
 from conans.model.build_info import CppInfo, DepCppInfo
+from conans.model.conan_file import ConanFile
 from conans.model.editable_layout import EditableLayout
 from conans.model.env_info import EnvInfo
 from conans.model.graph_info import GraphInfo
@@ -33,8 +34,7 @@ from conans.model.user_info import UserInfo
 from conans.paths import BUILD_INFO, CONANINFO, RUN_LOG_NAME
 from conans.util.conan_v2_mode import CONAN_V2_MODE_ENVVAR
 from conans.util.env_reader import get_env
-from conans.util.files import (clean_dirty, is_dirty, make_read_only, mkdir, rmdir, save, set_dirty,
-                               set_dirty_context_manager)
+from conans.util.files import clean_dirty, is_dirty, make_read_only, mkdir, rmdir, save, set_dirty
 from conans.util.log import logger
 from conans.util.tracer import log_package_built, log_package_got_from_local_cache
 
@@ -61,11 +61,12 @@ def add_env_conaninfo(conan_file, subtree_libnames):
 
 
 class _PackageBuilder(object):
-    def __init__(self, cache, output, hook_manager, remote_manager):
+    def __init__(self, cache, output, hook_manager, remote_manager, generators):
         self._cache = cache
         self._output = output
         self._hook_manager = hook_manager
         self._remote_manager = remote_manager
+        self._generator_manager = generators
 
     def _get_build_folder(self, conanfile, package_layout, pref, keep_build, recorder):
         # Build folder can use a different package_ID if build_id() is defined.
@@ -123,7 +124,7 @@ class _PackageBuilder(object):
     def _build(self, conanfile, pref):
         # Read generators from conanfile and generate the needed files
         logger.info("GENERATORS: Writing generators")
-        write_generators(conanfile, conanfile.build_folder, self._output)
+        self._generator_manager.write_generators(conanfile, conanfile.build_folder, self._output)
 
         logger.info("TOOLCHAIN: Writing toolchain")
         write_toolchain(conanfile, conanfile.build_folder, self._output)
@@ -198,7 +199,6 @@ class _PackageBuilder(object):
 
         # BUILD & PACKAGE
         with package_layout.conanfile_read_lock(self._output):
-            _remove_folder_raising(package_folder)
             mkdir(build_folder)
             with tools.chdir(build_folder):
                 self._output.info('Building your package in %s' % build_folder)
@@ -246,7 +246,9 @@ def _handle_system_requirements(conan_file, pref, cache, out):
 
     Used after remote package retrieving and before package building
     """
-    if "system_requirements" not in type(conan_file).__dict__:
+    # TODO: Check if this idiom should be generalize to all methods defined in base ConanFile
+    # Instead of calling empty methods
+    if type(conan_file).system_requirements == ConanFile.system_requirements:
         return
 
     package_layout = cache.package_layout(pref.ref)
@@ -287,6 +289,12 @@ class BinaryInstaller(object):
         self._recorder = recorder
         self._binaries_analyzer = app.binaries_analyzer
         self._hook_manager = app.hook_manager
+        self._generator_manager = app.generator_manager
+        # Load custom generators from the cache, generators are part of the binary
+        # build and install. Generators loaded here from the cache will have precedence
+        # and overwrite possible generators loaded from packages (requires)
+        for generator_path in app.cache.generators:
+            app.loader.load_generators(generator_path)
 
     def install(self, deps_graph, remotes, build_mode, update, keep_build=False, graph_info=None):
         # order by levels and separate the root node (ref=None) from the rest
@@ -372,7 +380,9 @@ class BinaryInstaller(object):
         def _download(n):
             npref = n.pref
             layout = self._cache.package_layout(npref.ref, n.conanfile.short_paths)
-            with layout.package_lock(npref):
+            # We cannot embed the package_lock inside the remote.get_package()
+            # because the handle_node_cache has its own lock
+            with layout.package_lock(pref):
                 self._download_pkg(layout, npref, n)
 
         parallel = self._cache.config.parallel_download
@@ -387,15 +397,8 @@ class BinaryInstaller(object):
                 _download(node)
 
     def _download_pkg(self, layout, pref, node):
-        conanfile = node.conanfile
-        package_folder = layout.package(pref)
-        output = conanfile.output
-        with set_dirty_context_manager(package_folder):
-            self._remote_manager.get_package(pref, package_folder, node.binary_remote,
-                                             output, self._recorder)
-            output.info("Downloaded package revision %s" % pref.revision)
-            with layout.update_metadata() as metadata:
-                metadata.packages[pref.id].remote = node.binary_remote.name
+        self._remote_manager.get_package(pref, layout, node.binary_remote,
+                                         node.conanfile.output, self._recorder)
 
     def _build(self, nodes_by_level, keep_build, root_node, graph_info, remotes, build_mode, update):
         using_build_profile = bool(graph_info.profile_build)
@@ -450,7 +453,7 @@ class BinaryInstaller(object):
             if build_folder is not None:
                 build_folder = os.path.join(base_path, build_folder)
                 output = node.conanfile.output
-                write_generators(node.conanfile, build_folder, output)
+                self._generator_manager.write_generators(node.conanfile, build_folder, output)
                 write_toolchain(node.conanfile, build_folder, output)
                 save(os.path.join(build_folder, CONANINFO), node.conanfile.info.dumps())
                 output.info("Generated %s" % CONANINFO)
@@ -478,14 +481,14 @@ class BinaryInstaller(object):
         output = conanfile.output
 
         layout = self._cache.package_layout(pref.ref, conanfile.short_paths)
-        package_folder = layout.package(pref)
 
         with layout.package_lock(pref):
             if pref not in processed_package_references:
                 processed_package_references.add(pref)
                 if node.binary == BINARY_BUILD:
                     assert node.prev is None, "PREV for %s to be built should be None" % str(pref)
-                    with set_dirty_context_manager(package_folder):
+                    layout.package_remove(pref)
+                    with layout.set_dirty_context_manager(pref):
                         pref = self._build_package(node, output, keep_build, remotes)
                     assert node.prev, "Node PREV shouldn't be empty"
                     assert node.pref.revision, "Node PREF revision shouldn't be empty"
@@ -499,6 +502,11 @@ class BinaryInstaller(object):
                     log_package_got_from_local_cache(pref)
                     self._recorder.package_fetched_from_cache(pref)
 
+            package_folder = layout.package(pref)
+            if not os.path.isdir(package_folder):
+                raise ConanException("Package '%s' corrupted. Package folder must exist: %s\n"
+                                     "Try removing the package with 'conan remove'"
+                                     % (str(pref), package_folder))
             # Call the info method
             self._call_package_info(conanfile, package_folder, ref=pref.ref)
             self._recorder.package_cpp_info(pref, conanfile.cpp_info)
@@ -515,7 +523,8 @@ class BinaryInstaller(object):
                 complete_recipe_sources(self._remote_manager, self._cache,
                                         python_require.conanfile, python_require.ref, remotes)
 
-        builder = _PackageBuilder(self._cache, output, self._hook_manager, self._remote_manager)
+        builder = _PackageBuilder(self._cache, output, self._hook_manager, self._remote_manager,
+                                  self._generator_manager)
         pref = builder.build_package(node, keep_build, self._recorder, remotes)
         if node.graph_lock_node:
             node.graph_lock_node.prev = pref.revision

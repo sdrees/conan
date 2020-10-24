@@ -109,20 +109,11 @@ class CompilerFlagsTest(unittest.TestCase):
         self.assertEqual(_make_cppstd_flag("clang", "5.1", "14"), '-std=c++14')
         self.assertEqual(_make_cppstd_flag("clang", "5.1", "17"), '-std=c++17')
 
-        self.assertEqual(_make_cppstd_flag("clang", "6", "11"), '-std=c++11')
-        self.assertEqual(_make_cppstd_flag("clang", "6", "14"), '-std=c++14')
-        self.assertEqual(_make_cppstd_flag("clang", "6", "17"), '-std=c++17')
-        self.assertEqual(_make_cppstd_flag("clang", "6", "20"), '-std=c++2a')
-
-        self.assertEqual(_make_cppstd_flag("clang", "7", "11"), '-std=c++11')
-        self.assertEqual(_make_cppstd_flag("clang", "7", "14"), '-std=c++14')
-        self.assertEqual(_make_cppstd_flag("clang", "7", "17"), '-std=c++17')
-        self.assertEqual(_make_cppstd_flag("clang", "7", "20"), '-std=c++2a')
-
-        self.assertEqual(_make_cppstd_flag("clang", "8", "11"), '-std=c++11')
-        self.assertEqual(_make_cppstd_flag("clang", "8", "14"), '-std=c++14')
-        self.assertEqual(_make_cppstd_flag("clang", "8", "17"), '-std=c++17')
-        self.assertEqual(_make_cppstd_flag("clang", "8", "20"), '-std=c++2a')
+        for version in ["6", "7", "8", "9", "10", "11"]:
+            self.assertEqual(_make_cppstd_flag("clang", version, "11"), '-std=c++11')
+            self.assertEqual(_make_cppstd_flag("clang", version, "14"), '-std=c++14')
+            self.assertEqual(_make_cppstd_flag("clang", version, "17"), '-std=c++17')
+            self.assertEqual(_make_cppstd_flag("clang", version, "20"), '-std=c++2a')
 
     def test_clang_cppstd_defaults(self):
         self.assertEqual(_make_cppstd_default("clang", "2"), "gnu98")
@@ -135,6 +126,10 @@ class CompilerFlagsTest(unittest.TestCase):
         self.assertEqual(_make_cppstd_default("clang", "5.1"), "gnu98")
         self.assertEqual(_make_cppstd_default("clang", "6"), "gnu14")
         self.assertEqual(_make_cppstd_default("clang", "7"), "gnu14")
+        self.assertEqual(_make_cppstd_default("clang", "8"), "gnu14")
+        self.assertEqual(_make_cppstd_default("clang", "9"), "gnu14")
+        self.assertEqual(_make_cppstd_default("clang", "10"), "gnu14")
+        self.assertEqual(_make_cppstd_default("clang", "11"), "gnu14")
 
     def test_apple_clang_cppstd_flags(self):
         self.assertEqual(_make_cppstd_flag("apple-clang", "3.9", "98"), None)
@@ -183,6 +178,9 @@ class CompilerFlagsTest(unittest.TestCase):
         self.assertEqual(_make_cppstd_flag("apple-clang", "11.0", "17"), "-std=c++17")
         self.assertEqual(_make_cppstd_flag("apple-clang", "11.0", "20"), "-std=c++2a")
 
+        self.assertEqual(_make_cppstd_flag("apple-clang", "12.0", "17"), "-std=c++17")
+        self.assertEqual(_make_cppstd_flag("apple-clang", "12.0", "20"), "-std=c++2a")
+
     def test_apple_clang_cppstd_defaults(self):
         self.assertEqual(_make_cppstd_default("apple-clang", "2"), "gnu98")
         self.assertEqual(_make_cppstd_default("apple-clang", "3"), "gnu98")
@@ -194,6 +192,7 @@ class CompilerFlagsTest(unittest.TestCase):
         self.assertEqual(_make_cppstd_default("apple-clang", "9"), "gnu98")
         self.assertEqual(_make_cppstd_default("apple-clang", "10"), "gnu98")
         self.assertEqual(_make_cppstd_default("apple-clang", "11"), "gnu98")
+        self.assertEqual(_make_cppstd_default("apple-clang", "12"), "gnu98")
 
     def test_visual_cppstd_flags(self):
         self.assertEqual(_make_cppstd_flag("Visual Studio", "12", "11"), None)

@@ -48,6 +48,7 @@ _DIRTY_FOLDER = ".dirty"
 
 def set_dirty(folder):
     dirty_file = os.path.normpath(folder) + _DIRTY_FOLDER
+    assert not os.path.exists(dirty_file), "Folder '{}' is already dirty".format(folder)
     save(dirty_file, "")
 
 
@@ -127,7 +128,10 @@ def normalize(text):
 
 
 def md5(content):
-    md5alg = hashlib.md5()
+    try:
+        md5alg = hashlib.md5()
+    except ValueError:  # FIPS error https://github.com/conan-io/conan/issues/7800
+        md5alg = hashlib.md5(usedforsecurity=False)
     if isinstance(content, bytes):
         tmp = content
     else:
@@ -151,7 +155,10 @@ def sha256sum(file_path):
 def _generic_algorithm_sum(file_path, algorithm_name):
 
     with open(file_path, 'rb') as fh:
-        m = hashlib.new(algorithm_name)
+        try:
+            m = hashlib.new(algorithm_name)
+        except ValueError:  # FIPS error https://github.com/conan-io/conan/issues/7800
+            m = hashlib.new(algorithm_name, usedforsecurity=False)
         while True:
             data = fh.read(8192)
             if not data:
@@ -209,7 +216,7 @@ def to_file_bytes(content, encoding="utf-8"):
 
 
 def save_files(path, files, only_if_modified=False, encoding="utf-8"):
-    for name, content in list(files.items()):
+    for name, content in files.items():
         save(os.path.join(path, name), content, only_if_modified=only_if_modified, encoding=encoding)
 
 
@@ -436,4 +443,3 @@ def merge_directories(src, dst, excluded=None):
                 link_to_rel(src_file)
             else:
                 shutil.copy2(src_file, dst_file)
-

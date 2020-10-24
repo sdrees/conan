@@ -14,13 +14,13 @@ from conans.util.files import load
 @attr("slow")
 class BasicBuildTest(unittest.TestCase):
 
-    def build_cmake_test(self):
+    def test_build_cmake(self):
         for cmd, lang, static, pure_c in [("install .", 0, True, True),
                                           ("install . -o language=1 -o static=False", 1,
                                            False, False)]:
             build(self, cmd, static, pure_c, use_cmake=True, lang=lang)
 
-    def build_default_test(self):
+    def test_build_default(self):
         """ build default (gcc in nix, VS in win) """
         if platform.system() == "SunOS":
             return  # If is using sun-cc the gcc generator doesn't work
@@ -33,9 +33,7 @@ class BasicBuildTest(unittest.TestCase):
 
 def build(tester, cmd, static, pure_c, use_cmake, lang):
     client = TestClient()
-    dll_export = client.default_compiler_visual_studio and not static
-    files = cpp_hello_conan_files("Hello0", "0.1", dll_export=dll_export,
-                                  pure_c=pure_c, use_cmake=use_cmake)
+    files = cpp_hello_conan_files("Hello0", "0.1", pure_c=pure_c, use_cmake=use_cmake)
 
     client.save(files)
     client.run(cmd)
