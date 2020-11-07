@@ -6,6 +6,7 @@ import time
 import unittest
 import zipfile
 
+import pytest
 import six
 from mock import patch
 
@@ -14,6 +15,7 @@ from conans.client.conf import ConanClientConfigParser
 from conans.client.conf.config_installer import _hide_password, _ConfigOrigin
 from conans.client.rest.file_downloader import FileDownloader
 from conans.errors import ConanException
+from conans.test.assets.genconanfile import GenConanfile
 from conans.test.utils.test_files import temp_folder
 from conans.test.utils.tools import TestClient, StoppableThreadBottle
 from conans.util.files import load, mkdir, save, save_files, make_file_read_only
@@ -132,6 +134,20 @@ class ConfigInstallTest(unittest.TestCase):
         content = load(client.cache.conan_conf_path)
         self.assertEqual(1, content.count("foo"))
         self.assertEqual(1, content.count("custom/custom"))
+
+    def test_config_fails_no_storage(self):
+        folder = temp_folder(path_with_spaces=False)
+        save_files(folder, {"remotes.txt": remotes})
+        client = TestClient()
+        client.save({"conanfile.py": GenConanfile()})
+        client.run("create . pkg/1.0@")
+        conf = load(client.cache.conan_conf_path)
+        conf = conf.replace("path = ./data", "")
+        save(client.cache.conan_conf_path, conf)
+        client.run('config install "%s"' % folder)
+        client.run("remote list")
+        self.assertIn("myrepo1: https://myrepourl.net [Verify SSL: False]", client.out)
+        self.assertIn("my-repo-2: https://myrepo2.com [Verify SSL: True]", client.out)
 
     def _create_zip(self, zippath=None):
         folder = self._create_profile_folder()
@@ -371,6 +387,7 @@ class Pkg(ConanFile):
         self.assertIn("ERROR: Failed conan config install: "
                       "Error while installing config from httpnonexisting", self.client.out)
 
+    @pytest.mark.tool_git
     def test_install_repo(self):
         """ should install from a git repo
         """
@@ -387,6 +404,7 @@ class Pkg(ConanFile):
         check_path = os.path.join(folder, ".git")
         self._check("git, %s, True, None" % check_path)
 
+    @pytest.mark.tool_git
     def test_install_repo_relative(self):
         relative_folder = "./config"
         absolute_folder = os.path.join(self.client.current_folder, "config")
@@ -402,6 +420,7 @@ class Pkg(ConanFile):
         self.client.run('config install "%s/.git"' % relative_folder)
         self._check("git, %s, True, None" % os.path.join("%s" % folder, ".git"))
 
+    @pytest.mark.tool_git
     def test_install_custom_args(self):
         """ should install from a git repo
         """
@@ -514,6 +533,7 @@ class Pkg(ConanFile):
         with patch.object(FileDownloader, 'download', new=download_verify_true):
             self.client.run("config install %s --verify-ssl=True" % fake_url)
 
+    @pytest.mark.tool_git
     def test_git_checkout_is_possible(self):
         folder = self._create_profile_folder()
         with self.client.chdir(folder):
@@ -686,6 +706,7 @@ class ConfigInstallSchedTest(unittest.TestCase):
         self.assertIn("ERROR: Incorrect definition of general.config_install_interval: 1s",
                       self.client.out)
 
+    @pytest.mark.tool_git
     def test_config_install_remove_git_repo(self):
         """ config_install_interval must break when remote git has been removed
         """
@@ -711,6 +732,7 @@ class ConfigInstallSchedTest(unittest.TestCase):
             self.client.run("config --help")
             self.assertIn("Repo cloned!", self.client.out)
 
+    @pytest.mark.tool_git
     def test_config_install_remove_config_repo(self):
         """ config_install_interval should not run when config list is empty
         """

@@ -5,18 +5,18 @@ import stat
 import textwrap
 import unittest
 
+import pytest
 import six
 from mock import patch
 from requests.packages.urllib3.exceptions import ConnectionError
 
 from conans import DEFAULT_REVISION_V1
-from conans.client.tools import environment_append
 from conans.client.tools.files import untargz
 from conans.model.manifest import FileTreeManifest
 from conans.model.package_metadata import PackageMetadata
 from conans.model.ref import ConanFileReference, PackageReference
 from conans.paths import CONANFILE, CONANINFO, CONAN_MANIFEST, EXPORT_TGZ_NAME
-from conans.test.utils.cpp_test_files import cpp_hello_conan_files, cpp_hello_source_files
+from conans.test.assets.cpp_test_files import cpp_hello_conan_files, cpp_hello_source_files
 from conans.test.utils.test_files import temp_folder, uncompress_packaged_files
 from conans.test.utils.tools import (NO_SETTINGS_PACKAGE_ID, TestClient, TestRequester, TestServer,
                                      GenConanfile)
@@ -133,6 +133,7 @@ class UploadTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.server_reg_folder))
         self.assertFalse(os.path.exists(self.server_pack_folder))
 
+    @pytest.mark.tool_compiler  # Needed only because it assume that a settings.compiler is detected
     def test_try_upload_bad_recipe(self):
         files = cpp_hello_conan_files("Hello0", "1.2.1")
         self.client.save(files)
@@ -144,6 +145,7 @@ class UploadTest(unittest.TestCase):
 
         self.assertIn("Cannot upload corrupted recipe", self.client.out)
 
+    @pytest.mark.tool_compiler  # Needed only because it assume that a settings.compiler is detected
     def test_upload_with_pattern(self):
         for num in range(5):
             files = cpp_hello_conan_files("Hello%s" % num, "1.2.1")
@@ -162,6 +164,7 @@ class UploadTest(unittest.TestCase):
         self.assertNotIn("Hello2", self.client.out)
         self.assertNotIn("Hello3", self.client.out)
 
+    @pytest.mark.tool_compiler  # Needed only because it assume that a settings.compiler is detected
     def test_upload_error(self):
         """Cause an error in the transfer and see some message"""
 
@@ -214,6 +217,7 @@ class UploadTest(unittest.TestCase):
         client.run("upload Hello* --confirm --retry 3 --retry-wait=0 --all")
         self.assertEqual(str(client.out).count("ERROR: Pair file, error!"), 6)
 
+    @pytest.mark.tool_compiler  # Needed only because it assume that a settings.compiler is detected
     def test_upload_error_with_config(self):
         """Cause an error in the transfer and see some message"""
 
@@ -312,56 +316,6 @@ class UploadTest(unittest.TestCase):
         self.assertIn("ERROR: lib0/1.0@user/channel: Upload recipe to 'default' failed: "
                       "Conan interactive mode disabled. [Remote: default]", client.out)
 
-    def test_recipe_upload_fail_on_generic_exception(self):
-        # Make the upload fail with a generic Exception
-        client = TestClient(default_server_user=True)
-        conanfile = textwrap.dedent("""
-            import os
-            from conans import ConanFile
-            class Pkg(ConanFile):
-                exports = "*"
-                def package(self):
-                    self.copy("*")
-            """)
-        client.save({"conanfile.py": conanfile,
-                     "myheader.h": "",
-                     "conan_export.tgz/dummy": ""})
-        client.run('create . lib/1.0@user/channel')
-        client.run('upload lib* -c --all -r default', assert_error=True)
-        self.assertIn("ERROR: lib/1.0@user/channel: Upload recipe to 'default' failed:", client.out)
-        self.assertIn("ERROR: Errors uploading some packages", client.out)
-
-    def test_package_upload_fail_on_generic_exception(self):
-        # Make the upload fail with a generic Exception
-        client = TestClient(default_server_user=True)
-        conanfile = textwrap.dedent("""
-            import os
-            from conans import ConanFile
-            class Pkg(ConanFile):
-                exports = "*"
-                def package(self):
-                    os.makedirs(os.path.join(self.package_folder, "conan_package.tgz"))
-                    self.copy("*")
-            """)
-        client.save({"conanfile.py": conanfile,
-                     "myheader.h": ""})
-        client.run('create . lib/1.0@user/channel')
-
-        client.run('upload lib* -c --all -r default', assert_error=True)
-        self.assertNotIn("os.remove(tgz_path)", client.out)
-        self.assertNotIn("Traceback", client.out)
-        self.assertIn("ERROR: lib/1.0@user/channel:5ab84d6acfe1f23c4fae0ab88f26e3a396351ac9: "
-                      "Upload package to 'default' failed:", client.out)
-        self.assertIn("ERROR: Errors uploading some packages", client.out)
-
-        with environment_append({"CONAN_VERBOSE_TRACEBACK": "True"}):
-            client.run('upload lib* -c --all -r default', assert_error=True)
-            self.assertIn("os.remove(tgz_path)", client.out)
-            self.assertIn("Traceback", client.out)
-            self.assertIn("ERROR: lib/1.0@user/channel:5ab84d6acfe1f23c4fae0ab88f26e3a396351ac9: "
-                          "Upload package to 'default' failed:", client.out)
-            self.assertIn("ERROR: Errors uploading some packages", client.out)
-
     def test_beat_character_long_upload(self):
         client = TestClient(default_server_user=True)
         slow_conanfile = textwrap.dedent("""
@@ -393,6 +347,7 @@ class UploadTest(unittest.TestCase):
         self.assertIn("-p parameter only allowed with a valid recipe reference",
                       self.client.out)
 
+    @pytest.mark.tool_compiler  # Needed only because it assume that a settings.compiler is detected
     def test_check_upload_confirm_question(self):
         user_io = MockedUserIO({"default": [("lasote", "mypass")]}, out=TestBufferConanOutput())
         files = cpp_hello_conan_files("Hello1", "1.2.1")

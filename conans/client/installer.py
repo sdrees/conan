@@ -356,8 +356,9 @@ class BinaryInstaller(object):
 
         raise ConanException(textwrap.dedent('''\
             Missing prebuilt package for '%s'
-            Try to build from sources with "%s"
-            Or read "http://docs.conan.io/en/latest/faq/troubleshooting.html#error-missing-prebuilt-package"
+            Try to build from sources with '%s'
+            Use 'conan search <reference> --table table.html'
+            Or read 'http://docs.conan.io/en/latest/faq/troubleshooting.html#error-missing-prebuilt-package'
             ''' % (missing_pkgs, build_str)))
 
     def _download(self, downloads, processed_package_refs):
@@ -383,7 +384,7 @@ class BinaryInstaller(object):
             # We cannot embed the package_lock inside the remote.get_package()
             # because the handle_node_cache has its own lock
             with layout.package_lock(pref):
-                self._download_pkg(layout, npref, n)
+                self._download_pkg(layout, n)
 
         parallel = self._cache.config.parallel_download
         if parallel is not None:
@@ -396,8 +397,8 @@ class BinaryInstaller(object):
             for node in download_nodes:
                 _download(node)
 
-    def _download_pkg(self, layout, pref, node):
-        self._remote_manager.get_package(pref, layout, node.binary_remote,
+    def _download_pkg(self, layout, node):
+        self._remote_manager.get_package(node.conanfile, node.pref, layout, node.binary_remote,
                                          node.conanfile.output, self._recorder)
 
     def _build(self, nodes_by_level, keep_build, root_node, graph_info, remotes, build_mode, update):
@@ -495,7 +496,7 @@ class BinaryInstaller(object):
                     assert pref.revision is not None, "PREV for %s to be built is None" % str(pref)
                 elif node.binary in (BINARY_UPDATE, BINARY_DOWNLOAD):
                     # this can happen after a re-evaluation of packageID with Package_ID_unknown
-                    self._download_pkg(layout, node.pref, node)
+                    self._download_pkg(layout, node)
                 elif node.binary == BINARY_CACHE:
                     assert node.prev, "PREV for %s is None" % str(pref)
                     output.success('Already installed!')
@@ -557,23 +558,25 @@ class BinaryInstaller(object):
             if n not in transitive:
                 conan_file.output.info("Applying build-requirement: %s" % str(n.ref))
 
+            dep_cpp_info = n.conanfile._conan_dep_cpp_info
+
             if not using_build_profile:  # Do not touch anything
                 conan_file.deps_user_info[n.ref.name] = n.conanfile.user_info
-                conan_file.deps_cpp_info.add(n.ref.name, n.conanfile._conan_dep_cpp_info)
+                conan_file.deps_cpp_info.add(n.ref.name, dep_cpp_info)
                 conan_file.deps_env_info.update(n.conanfile.env_info, n.ref.name)
             else:
                 if n in transitive or n in br_host:
                     conan_file.deps_user_info[n.ref.name] = n.conanfile.user_info
-                    conan_file.deps_cpp_info.add(n.ref.name, n.conanfile._conan_dep_cpp_info)
+                    conan_file.deps_cpp_info.add(n.ref.name, dep_cpp_info)
                 else:
                     conan_file.user_info_build[n.ref.name] = n.conanfile.user_info
                     env_info = EnvInfo()
                     env_info._values_ = n.conanfile.env_info._values_.copy()
                     # Add cpp_info.bin_paths/lib_paths to env_info (it is needed for runtime)
-                    env_info.DYLD_LIBRARY_PATH.extend(n.conanfile._conan_dep_cpp_info.lib_paths)
-                    env_info.DYLD_LIBRARY_PATH.extend(n.conanfile._conan_dep_cpp_info.framework_paths)
-                    env_info.LD_LIBRARY_PATH.extend(n.conanfile._conan_dep_cpp_info.lib_paths)
-                    env_info.PATH.extend(n.conanfile._conan_dep_cpp_info.bin_paths)
+                    env_info.DYLD_LIBRARY_PATH.extend(dep_cpp_info.lib_paths)
+                    env_info.DYLD_LIBRARY_PATH.extend(dep_cpp_info.framework_paths)
+                    env_info.LD_LIBRARY_PATH.extend(dep_cpp_info.lib_paths)
+                    env_info.PATH.extend(dep_cpp_info.bin_paths)
                     conan_file.deps_env_info.update(env_info, n.ref.name)
 
         # Update the info but filtering the package values that not apply to the subtree
@@ -595,7 +598,8 @@ class BinaryInstaller(object):
         # Once the node is build, execute package info, so it has access to the
         # package folder and artifacts
         conan_v2 = get_env(CONAN_V2_MODE_ENVVAR, False)
-        with pythonpath(conanfile) if not conan_v2 else no_op():  # Minimal pythonpath, not the whole context, make it 50% slower
+        # Minimal pythonpath, not the whole context, make it 50% slower
+        with pythonpath(conanfile) if not conan_v2 else no_op():
             with tools.chdir(package_folder):
                 with conanfile_exception_formatter(str(conanfile), "package_info"):
                     conanfile.package_folder = package_folder

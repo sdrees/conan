@@ -1,10 +1,14 @@
 import os
 import platform
+import re
 import textwrap
 import unittest
 
+import pytest
 
+from conans.client.toolchain.visual import vcvars_command
 from conans.client.tools import vs_installation_path
+from conans.test.assets.sources import gen_function_cpp
 from conans.test.utils.tools import TestClient
 
 
@@ -96,14 +100,16 @@ myapp_vcxproj = r"""<?xml version="1.0" encoding="utf-8"?>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <!-- Very IMPORTANT this should go BEFORE the Microsoft.Cpp.props.
+  If it goes after, the Toolset definition is ignored -->
+  <ImportGroup Label="PropertySheets">
+    <Import Project="..\conan\conan_Hello.props" />
+    <Import Project="..\conan\conan_toolchain.props" />
+  </ImportGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
   <ImportGroup Label="Shared">
-  </ImportGroup>
-  <ImportGroup Label="PropertySheets">
-    <Import Project="..\conan\conan_Hello.props" />
-    <Import Project="..\conan\conan_toolchain.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
@@ -215,10 +221,11 @@ myapp_vcxproj = r"""<?xml version="1.0" encoding="utf-8"?>
 
 
 @unittest.skipUnless(platform.system() == "Windows", "Only for windows")
+@pytest.mark.tool_visual_studio
 class WinTest(unittest.TestCase):
 
     conanfile = textwrap.dedent("""
-        from conans import ConanFile, MSBuildToolchain
+        from conans import ConanFile, MSBuildToolchain, MSBuild
         class App(ConanFile):
             settings = "os", "arch", "compiler", "build_type"
             requires = "hello/0.1"
@@ -233,65 +240,31 @@ class WinTest(unittest.TestCase):
                 else:
                     tc.preprocessor_definitions["DEFINITIONS_CONFIG"] = "Release"
                 tc.write_toolchain_files()
+
+            def build(self):
+                msbuild = MSBuild(self)
+                msbuild.build("MyProject.sln")
         """)
 
-    app = textwrap.dedent("""
-        #include <iostream>
-        #include "hello.h"
+    app = gen_function_cpp(name="main", includes=["hello"], calls=["hello"],
+                           preprocessor=["DEFINITIONS_BOTH", "DEFINITIONS_CONFIG"])
 
-        int main() {
-            auto number = 0b1111'1111 ;  // VS 2017 is C++14 by default
-            hello();
-
-            #ifdef _M_X64
-            std::cout << "AppArch x64!!!\\n";
-            #else
-            std::cout << "AppArch x86!!!\\n";
-            #endif
-
-            #if _MSC_VER > 1900 && _MSC_VER < 1920
-            std::cout << "AppMSCVER 17!!" << std::endl;
-            # endif
-
-            #if _MSC_VER == 1900
-            std::cout << "AppMSCVER 15!!" << std::endl;
-            # endif
-
-            #if _MSVC_LANG == 201402L
-            std::cout << "AppCppStd 14!!!\\n";
-            #endif
-
-            #if _MSVC_LANG == 201703L
-            std::cout << "AppCppStd 17!!!\\n";
-            #endif
-
-
-            #ifdef NDEBUG
-            std::cout << "App: Release!" <<std::endl;
-            #else
-            std::cout << "App: Debug!" <<std::endl;
-            #endif
-
-            std::cout << "DEFINITIONS_BOTH: " << DEFINITIONS_BOTH << "\\n";
-            std::cout << "DEFINITIONS_CONFIG: " << DEFINITIONS_CONFIG << "\\n";
-        }
-        """)
-
-    def _run_app(self, client, arch, build_type, msg="App"):
+    def _run_app(self, client, arch, build_type, msg="main"):
         if arch == "x86":
             command_str = "%s\\MyApp.exe" % build_type
         else:
             command_str = "x64\\%s\\MyApp.exe" % build_type
         client.run_command(command_str)
         if arch == "x86":
-            self.assertIn("AppArch x86!!!", client.out)
+            self.assertIn("main _M_IX86 defined", client.out)
         else:
-            self.assertIn("AppArch x64!!!", client.out)
+            self.assertIn("main _M_X64 defined", client.out)
         self.assertIn("Hello World %s" % build_type, client.out)
         self.assertIn("%s: %s!" % (msg, build_type), client.out)
         self.assertIn("DEFINITIONS_BOTH: True", client.out)
         self.assertIn("DEFINITIONS_CONFIG: %s" % build_type, client.out)
 
+    @pytest.mark.tool_cmake
     def test_toolchain_win(self):
         client = TestClient(path_with_spaces=False)
         settings = {"compiler": "Visual Studio",
@@ -316,27 +289,26 @@ class WinTest(unittest.TestCase):
 
         # Run the configure corresponding to this test case
         client.run("install . %s -if=conan" % (settings, ))
-        self.assertIn("conanfile.py: MSBuildToolchain created "
-                      "conan_toolchain_release_win32.props", client.out)
-        vs_path = vs_installation_path("15")
-        vcvars_path = os.path.join(vs_path, "VC/Auxiliary/Build/vcvarsall.bat")
+        self.assertIn("conanfile.py: MSBuildToolchain created conan_toolchain_release_win32.props",
+                      client.out)
+        client.run("build . -if=conan")
 
-        cmd = ('set "VSCMD_START_DIR=%%CD%%" && '
-               '"%s" x86 && msbuild "MyProject.sln" /p:Configuration=Release' % vcvars_path)
-        client.run_command(cmd)
         self.assertIn("Visual Studio 2017", client.out)
         self.assertIn("[vcvarsall.bat] Environment initialized for: 'x86'", client.out)
         self._run_app(client, "x86", "Release")
-        self.assertIn("AppMSCVER 17!!", client.out)
-        self.assertIn("AppCppStd 17!!!", client.out)
+        version = re.search("main _MSC_VER19([0-9]*)", str(client.out)).group(1)
+        version = int(version)
+        self.assertTrue(10 <= version < 20)
+        self.assertIn("main _MSVC_LANG2017", client.out)
 
-        cmd = ('set "VSCMD_START_DIR=%%CD%%" && '
-               '"%s" x86 && dumpbin /dependents "Release\\MyApp.exe"' % vcvars_path)
+        vcvars = vcvars_command(version="15", architecture="x86")
+        cmd = ('%s && dumpbin /dependents "Release\\MyApp.exe"' % vcvars)
         client.run_command(cmd)
         # No other DLLs dependencies rather than kernel, it was MT, statically linked
         self.assertIn("KERNEL32.dll", client.out)
         self.assertEqual(1, str(client.out).count(".dll"))
 
+    @pytest.mark.tool_cmake
     def test_toolchain_win_debug(self):
         client = TestClient(path_with_spaces=False)
         settings = {"compiler": "Visual Studio",
@@ -363,27 +335,20 @@ class WinTest(unittest.TestCase):
         client.run("install . %s -if=conan" % (settings, ))
         self.assertIn("conanfile.py: MSBuildToolchain created conan_toolchain_debug_x64.props",
                       client.out)
-        vs_path = vs_installation_path("15")
-        vcvars_path = os.path.join(vs_path, "VC/Auxiliary/Build/vcvarsall.bat")
-
-        # FIXME: This is cheating, pass the toolset on the command line, nothing that devs would do
-        cmd = ('set "VSCMD_START_DIR=%%CD%%" && '
-               '"%s" x64 && '
-               'msbuild "MyProject.sln" /p:Configuration=Debug /p:PlatformToolset="v140"'
-               % vcvars_path)
-        client.run_command(cmd)
+        client.run("build . -if=conan")
         self.assertIn("Visual Studio 2017", client.out)
         self.assertIn("[vcvarsall.bat] Environment initialized for: 'x64'", client.out)
         self._run_app(client, "x64", "Debug")
-        self.assertIn("AppMSCVER 15!!", client.out)
-        self.assertIn("AppCppStd 14!!!", client.out)
+        self.assertIn("main _MSC_VER1900", client.out)
+        self.assertIn("main _MSVC_LANG2014", client.out)
 
-        cmd = ('set "VSCMD_START_DIR=%%CD%%" && '
-               '"%s" x64 && dumpbin /dependents "x64\\Debug\\MyApp.exe"' % vcvars_path)
+        vcvars = vcvars_command(version="15", architecture="amd64")
+        cmd = ('%s && dumpbin /dependents "x64\\Debug\\MyApp.exe"' % vcvars)
         client.run_command(cmd)
         self.assertIn("MSVCP140D.dll", client.out)
         self.assertIn("VCRUNTIME140D.dll", client.out)
 
+    @pytest.mark.tool_cmake
     def test_toolchain_win_multi(self):
         client = TestClient(path_with_spaces=False)
         settings = {"compiler": "Visual Studio",
@@ -423,5 +388,7 @@ class WinTest(unittest.TestCase):
             self.assertIn("Visual Studio 2017", client.out)
             self.assertIn("[vcvarsall.bat] Environment initialized for: 'x64'", client.out)
             self._run_app(client, arch, build_type)
-            self.assertIn("AppMSCVER 17!!", client.out)
-            self.assertIn("AppCppStd 17!!!", client.out)
+            version = re.search("main _MSC_VER19([0-9]*)", str(client.out)).group(1)
+            version = int(version)
+            self.assertTrue(10 <= version < 20)
+            self.assertIn("main _MSVC_LANG2017", client.out)

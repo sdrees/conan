@@ -1,5 +1,4 @@
 import os
-import platform
 import unittest
 
 import six
@@ -13,11 +12,11 @@ from conans.model.ref import ConanFileReference, PackageReference
 from conans.paths import BUILD_FOLDER, CONANFILE, CONANINFO, CONAN_MANIFEST, EXPORT_FOLDER, \
     PACKAGES_FOLDER, SRC_FOLDER
 from conans.server.store.server_store import ServerStore
-from conans.test.utils.cpp_test_files import cpp_hello_conan_files
+from conans.test.assets.cpp_test_files import cpp_hello_conan_files
+from conans.test.utils.mocks import TestBufferConanOutput
 from conans.test.utils.test_files import temp_folder
 from conans.test.utils.tools import NO_SETTINGS_PACKAGE_ID, TestClient, \
     TestServer, GenConanfile
-from conans.test.utils.mocks import TestBufferConanOutput
 from conans.util.env_reader import get_env
 from conans.util.files import load
 
@@ -131,7 +130,7 @@ conaninfo = '''
   OpenSSL/2.10@lasote/testing:2222
   HelloInfo1/0.45@myuser/testing:33333
 [recipe_hash]
-''' + fake_recipe_hash +  '''
+''' + fake_recipe_hash + '''
 [recipe_revision]
 '''
 
@@ -163,7 +162,8 @@ class RemoveTest(unittest.TestCase):
             fake_metadata = PackageMetadata()
             fake_metadata.recipe.revision = DEFAULT_REVISION_V1
             files["%s/%s/conanfile.py" % (folder, EXPORT_FOLDER)] = test_conanfile_contents
-            files["%s/%s/conanmanifest.txt" % (folder, EXPORT_FOLDER)] = "%s\nconanfile.py: 234234234" % fake_recipe_hash
+            files["%s/%s/conanmanifest.txt" % (
+                folder, EXPORT_FOLDER)] = "%s\nconanfile.py: 234234234" % fake_recipe_hash
             files["%s/%s/conans.txt" % (folder, SRC_FOLDER)] = ""
             for pack_id in (1, 2):
                 i = pack_id
@@ -172,7 +172,9 @@ class RemoveTest(unittest.TestCase):
                 prefs.append(PackageReference(ref, str(pack_id)))
                 files["%s/%s/%s/conans.txt" % (folder, BUILD_FOLDER, pack_id)] = ""
                 files["%s/%s/%s/conans.txt" % (folder, PACKAGES_FOLDER, pack_id)] = ""
-                files["%s/%s/%s/%s" % (folder, PACKAGES_FOLDER, pack_id, CONANINFO)] = conaninfo % str(i) + "905eefe3570dd09a8453b30b9272bb44"
+                files[
+                    "%s/%s/%s/%s" % (folder, PACKAGES_FOLDER, pack_id, CONANINFO)] = conaninfo % str(
+                    i) + "905eefe3570dd09a8453b30b9272bb44"
                 files["%s/%s/%s/%s" % (folder, PACKAGES_FOLDER, pack_id, CONAN_MANIFEST)] = ""
             files["%s/metadata.json" % folder] = fake_metadata.dumps()
             exports_sources_dir = client.cache.package_layout(ref).export_sources()
@@ -293,11 +295,11 @@ class RemoveTest(unittest.TestCase):
         folders = os.listdir(self.client.storage_folder)
         six.assertCountEqual(self, ["Hello", "Other", "Bye"], folders)
         six.assertCountEqual(self, ["build", "source", "export", "export_source", "metadata.json",
-                                    "metadata.json.lock"],
+                                    "dl", "metadata.json.lock"],
                              os.listdir(os.path.join(self.client.storage_folder,
                                                      "Hello/1.4.10/myuser/testing")))
         six.assertCountEqual(self, ["build", "source", "export", "export_source", "metadata.json",
-                                    "metadata.json.lock"],
+                                    "dl", "metadata.json.lock"],
                              os.listdir(os.path.join(self.client.storage_folder,
                                                      "Hello/2.4.11/myuser/testing")))
 
@@ -313,7 +315,7 @@ class RemoveTest(unittest.TestCase):
         self.client.run("remove Hello/*@myuser/testing -f")
         self._validate_remove_all_hello_packages()
 
-    def test_remove_any_package_version_channel(self):
+    def test_remove_any_package_version_user(self):
         self.client.run("remove Hello/*@*/testing -f")
         self._validate_remove_all_hello_packages()
 
@@ -329,7 +331,7 @@ class RemoveTest(unittest.TestCase):
         folders = os.listdir(self.client.storage_folder)
         six.assertCountEqual(self, ["Hello", "Other", "Bye"], folders)
 
-    def test_remove_any_package_channel(self):
+    def test_remove_any_package_user(self):
         self.client.run("remove Hello/1.4.10@*/testing -f")
         self._validate_remove_hello_1_4_10()
 
@@ -347,11 +349,11 @@ class RemoveTest(unittest.TestCase):
                             src_folders={"H1": True, "H2": True, "B": True, "O": True})
         folders = os.listdir(self.client.storage_folder)
         six.assertCountEqual(self, ["Hello", "Other", "Bye"], folders)
-        six.assertCountEqual(self, ["package", "source", "export", "export_source",
+        six.assertCountEqual(self, ["package", "dl", "source", "export", "export_source",
                                     "metadata.json", "metadata.json.lock"],
                              os.listdir(os.path.join(self.client.storage_folder,
                                                      "Hello/1.4.10/myuser/testing")))
-        six.assertCountEqual(self, ["package", "source", "export", "export_source",
+        six.assertCountEqual(self, ["package", "dl", "source", "export", "export_source",
                                     "metadata.json", "metadata.json.lock"],
                              os.listdir(os.path.join(self.client.storage_folder,
                                                      "Hello/2.4.11/myuser/testing")))
@@ -367,11 +369,11 @@ class RemoveTest(unittest.TestCase):
         folders = os.listdir(self.client.storage_folder)
         six.assertCountEqual(self, ["Hello", "Other", "Bye"], folders)
         six.assertCountEqual(self, ["package", "build", "export", "export_source", "metadata.json",
-                                    "metadata.json.lock"],
+                                    "dl", "metadata.json.lock"],
                              os.listdir(os.path.join(self.client.storage_folder,
                                                      "Hello/1.4.10/myuser/testing")))
         six.assertCountEqual(self, ["package", "build", "export", "export_source", "metadata.json",
-                                    "metadata.json.lock"],
+                                    "dl", "metadata.json.lock"],
                              os.listdir(os.path.join(self.client.storage_folder,
                                                      "Hello/2.4.11/myuser/testing")))
 
@@ -464,15 +466,9 @@ class RemoveTest(unittest.TestCase):
                                                                   "tested with revisions, in "
                                                                   "general all the module")
     def test_query_remove_locally(self):
-        # Incorrect casing of "hello"
-        self.client.run("remove hello/1.4.10@myuser/testing -q='compiler.version=4.4' -f",
+        self.client.run("remove notfoundname/1.4.10@myuser/testing -q='compiler.version=4.4' -f",
                         assert_error=True)
-        if platform.system() == "Linux":
-            self.assertIn("Recipe not found: 'hello/1.4.10@myuser/testing'", self.client.out)
-        else:
-            self.assertIn("Requested 'hello/1.4.10@myuser/testing' but found "
-                          "case incompatible 'Hello'\n"
-                          "Case insensitive filesystem can't manage this", self.client.out)
+        self.assertIn("Recipe not found: 'notfoundname/1.4.10@myuser/testing'", self.client.out)
         self.assert_folders({"H1": [1, 2], "H2": [1, 2], "B": [1, 2], "O": [1, 2]},
                             {"H1": [1, 2], "H2": [1, 2], "B": [1, 2], "O": [1, 2]},
                             {"H1": [1, 2], "H2": [1, 2], "B": [1, 2], "O": [1, 2]},

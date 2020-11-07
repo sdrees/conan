@@ -18,9 +18,6 @@ def download(app, ref, package_ids, remote, recipe, recorder, remotes):
     except NotFoundException:
         raise RecipeNotFoundException(ref)
 
-    with cache.package_layout(ref).update_metadata() as metadata:
-        metadata.recipe.remote = remote.name
-
     conan_file_path = cache.package_layout(ref).conanfile()
     conanfile = loader.load_basic(conan_file_path)
 
@@ -51,7 +48,7 @@ def _download_binaries(conanfile, ref, package_ids, cache, remote_manager, remot
         layout = cache.package_layout(pref.ref, short_paths=short_paths)
         if output and not output.is_terminal:
             output.info("Downloading %s" % str(pref))
-        remote_manager.get_package(pref, layout, remote, output, recorder)
+        remote_manager.get_package(conanfile, pref, layout, remote, output, recorder)
 
     if parallel is not None:
         output.info("Downloading binary packages in %s parallel threads" % parallel)

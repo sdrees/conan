@@ -4,6 +4,7 @@ import os
 import platform
 import unittest
 
+import pytest
 from nose.plugins.attrib import attr
 from parameterized import parameterized
 
@@ -11,7 +12,7 @@ from conans import MSBuild, tools
 from conans.client.runner import ConanRunner
 from conans.test.utils.mocks import MockSettings, MockConanfile, TestBufferConanOutput
 from conans.test.utils.tools import TestClient
-from conans.test.utils.visual_project_files import get_vs_project_files
+from conans.test.assets.visual_project_files import get_vs_project_files
 
 main_cpp = r"""#include <hello.h>
 
@@ -58,6 +59,8 @@ void hello(){
 
 
 @attr('slow')
+@pytest.mark.slow
+@pytest.mark.tool_visual_studio
 @unittest.skipUnless(platform.system() == "Windows", "Requires MSBuild")
 class VisualStudioMultiTest(unittest.TestCase):
 

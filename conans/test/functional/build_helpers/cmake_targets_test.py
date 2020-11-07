@@ -1,6 +1,7 @@
 import platform
 import unittest
 
+import pytest
 from nose.plugins.attrib import attr
 
 from conans.test.utils.tools import TestClient
@@ -47,6 +48,7 @@ int main(){
 
 
 @attr("slow")
+@pytest.mark.slow
 class CMakeTargetsTest(unittest.TestCase):
     def test_transitive_flags(self):
         client = TestClient()
@@ -75,6 +77,7 @@ class Alpha(ConanFile):
         self.assertIn('set(CONAN_SHARED_LINKER_FLAGS '
                       '"CharlieFlag BetaFlag ${CONAN_SHARED_LINKER_FLAGS}")', cmake)
 
+    @pytest.mark.tool_cmake
     def test_header_only(self):
         client = TestClient()
         client.save({"conanfile.py": conanfile_py,
